@@ -30,7 +30,8 @@ function readGenreConfigs() {
     if (!row[0] || !row[1]) continue;
     var genreName  = String(row[0]).trim();
     var rakutenUrl = String(row[1]).trim();
-    var enabled    = String(row[2] || '○').trim() !== '×';
+    var enabledRaw = row[2];
+    var enabled = enabledRaw === true || (String(enabledRaw).trim() !== '×' && String(enabledRaw).trim() !== 'false' && String(enabledRaw).trim() !== 'FALSE');
     var keepaCat   = String(row[3] || '').trim();
     if (enabled && genreName && rakutenUrl) {
       configs.push({ genreName: genreName, rakutenUrl: rakutenUrl, keepaCat: keepaCat });
@@ -123,17 +124,71 @@ function writeProducts(allResults, dateStr) {
 function writeExcludeCandidates(candidates, dateStr) {
   if (!candidates || candidates.length === 0) return;
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var ws = getOrCreateSheet(ss, SHEET_NAMES.EXCLUDES, ['ワード', '有効(○/×)', '種類', 'メモ']);
-  var existingData = ws.getRange(2, 1, Math.max(ws.getLastRow() - 1, 1), 1).getValues();
-  var existing = {};
-  for (var i = 0; i < existingData.length; i++) existing[String(existingData[i][0])] = true;
+  // 除外候補シートに書き込む（除外ワードシートとは別）
+  var ws = getOrCreateSheet(ss, '除外候補', ['有効', 'ワード', '種類', 'メモ']);
+
+  var lastRow = ws.getLastRow();
+  var existingRow = {};
+  var existingMemo = {};
+  if (lastRow >= 2) {
+    // B列=ワード, C列=種類, D列=メモ を一括取得
+    var data = ws.getRange(2, 2, lastRow - 1, 3).getValues();
+    for (var i = 0; i < data.length; i++) {
+      var w = String(data[i][0] || '').trim();
+      if (!w) continue;
+      existingRow[w]  = i + 2;                    // 絶対行番号
+      existingMemo[w] = String(data[i][2] || ''); // D列メモ
+    }
+  }
+
   var newRows = [];
+  var updates = [];
   for (var j = 0; j < candidates.length; j++) {
-    if (!existing[candidates[j]]) newRows.push([candidates[j], '?', '自動検出', dateStr + 'に頻出']);
+    var word = candidates[j];
+    if (existingRow[word]) {
+      updates.push({ row: existingRow[word], memo: buildExcludeMemo(existingMemo[word], dateStr) });
+    } else {
+      // A列=FALSE(チェックボックス), B列=ワード, C列=種類, D列=メモ
+      newRows.push([false, word, '自動検出', '初出:' + dateStr + ' / 最新:' + dateStr + ' / 検出:1回']);
+    }
   }
+
   if (newRows.length > 0) {
-    ws.getRange(ws.getLastRow() + 1, 1, newRows.length, 4).setValues(newRows);
+    var startRow = ws.getLastRow() + 1;
+    ws.getRange(startRow, 1, newRows.length, 4).setValues(newRows);
+    ws.getRange(startRow, 1, newRows.length, 1).insertCheckboxes();
+    Logger.log('除外候補 ' + newRows.length + '件追加');
   }
+  for (var k = 0; k < updates.length; k++) {
+    ws.getRange(updates[k].row, 4).setValue(updates[k].memo);
+  }
+  if (updates.length > 0) {
+    Logger.log('除外候補 ' + updates.length + '件メモ更新');
+  }
+}
+
+/**
+ * 既存メモをパースして最新日・検出回数を更新したメモ文字列を返す。
+ * 形式: "初出:YYYY-MM-DD / 最新:YYYY-MM-DD / 検出:N回"
+ * 旧形式 "YYYY-MM-DD に頻出" からの移行にも対応。
+ */
+function buildExcludeMemo(existingMemo, todayStr) {
+  var firstMatch = existingMemo.match(/初出:(\d{4}-\d{2}-\d{2})/);
+  var countMatch = existingMemo.match(/検出:(\d+)回/);
+  var oldFormat  = existingMemo.match(/(\d{4}-\d{2}-\d{2})\s*に頻出/);
+
+  var first, count;
+  if (firstMatch) {
+    first = firstMatch[1];
+    count = countMatch ? parseInt(countMatch[1], 10) + 1 : 2;
+  } else if (oldFormat) {
+    first = oldFormat[1];
+    count = 2;
+  } else {
+    first = todayStr;
+    count = 1;
+  }
+  return '初出:' + first + ' / 最新:' + todayStr + ' / 検出:' + count + '回';
 }
 
 function writeSummary(text, dateStr) {
