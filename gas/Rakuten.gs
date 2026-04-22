@@ -47,7 +47,7 @@ function fetchRakutenRanking(appId, genreId, maxItems) {
         if (allItems.length >= maxItems) break;
       }
       if (allItems.length >= maxItems) break;
-      Utilities.sleep(600);
+      Utilities.sleep(1200);
 
     } catch(e) {
       Logger.log('Rakuten API error page ' + page + ': ' + e);
