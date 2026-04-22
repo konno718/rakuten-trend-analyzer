@@ -1,0 +1,9 @@
+.env
+credentials.json
+data/trend_analyzer.db
+data/run.log
+data/cron.log
+*.log
+.DS_Store
+__pycache__/
+*.pyc

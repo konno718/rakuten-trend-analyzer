@@ -1,0 +1,8 @@
+requests==2.31.0
+janome==0.4.2
+gspread==6.1.2
+google-auth==2.29.0
+google-auth-oauthlib==1.2.0
+python-dotenv==1.0.1
+schedule==1.2.1
+anthropic==0.25.0
