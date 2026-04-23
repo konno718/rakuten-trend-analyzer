@@ -161,7 +161,11 @@ function runSetup() {
   Logger.log('セットアップ完了。設定シートにジャンルURL・モードを入力してください。');
 }
 
-// 自動トリガー登録（一度だけ実行）
+// === 自動トリガー登録 ===
+
+/**
+ * 旧runDailyCollection単体トリガー（後方互換・新フローでは使わない）
+ */
 function createDailyTrigger() {
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
@@ -172,7 +176,57 @@ function createDailyTrigger() {
   ScriptApp.newTrigger('runDailyCollection')
     .timeBased()
     .everyDays(1)
-    .atHour(2)
+    .atHour(1)
     .create();
-  Logger.log('毎日午前2時のトリガーを設定しました');
+  Logger.log('毎日午前1時のトリガーを設定しました（runDailyCollection）');
+}
+
+/**
+ * お宝分析システム用トリガーを一括登録（朝8時までに分析完了）
+ * - 01:00 runDailyCollection (ランキング収集)
+ * - 02:00〜06:00 runWordPoolStep (語彙プール構築・チェックポイント方式で継続)
+ * - 07:00 runHiddenGemAnalysis (突合+AI+書き出し)
+ *
+ * 既存の同名ハンドラトリガーは削除してから再登録するので、重複はしない。
+ */
+function createAnalysisTriggers() {
+  var handlers = ['runDailyCollection', 'runWordPoolStep', 'runHiddenGemAnalysis'];
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (handlers.indexOf(triggers[i].getHandlerFunction()) >= 0) {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+
+  // 01:00 ランキング収集
+  ScriptApp.newTrigger('runDailyCollection').timeBased().everyDays(1).atHour(1).create();
+
+  // 02:00-06:00 語彙プール構築（毎時間、チェックポイント方式で継続）
+  for (var h = 2; h <= 6; h++) {
+    ScriptApp.newTrigger('runWordPoolStep').timeBased().everyDays(1).atHour(h).create();
+  }
+
+  // 07:00 お宝分析
+  ScriptApp.newTrigger('runHiddenGemAnalysis').timeBased().everyDays(1).atHour(7).create();
+
+  Logger.log('お宝分析トリガー登録完了:');
+  Logger.log('  01:00 runDailyCollection');
+  Logger.log('  02-06:00 runWordPoolStep');
+  Logger.log('  07:00 runHiddenGemAnalysis');
+}
+
+/**
+ * 本システムの全トリガー削除（復旧・停止用）
+ */
+function removeAnalysisTriggers() {
+  var handlers = ['runDailyCollection', 'runWordPoolStep', 'runHiddenGemAnalysis'];
+  var triggers = ScriptApp.getProjectTriggers();
+  var removed = 0;
+  for (var i = 0; i < triggers.length; i++) {
+    if (handlers.indexOf(triggers[i].getHandlerFunction()) >= 0) {
+      ScriptApp.deleteTrigger(triggers[i]);
+      removed++;
+    }
+  }
+  Logger.log('トリガー ' + removed + '本削除');
 }
