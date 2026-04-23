@@ -28,6 +28,18 @@ function runWordPoolStep() {
   }
 
   var genreConfigs = readGenreConfigs();
+  // ジャンルID重複を除去（同じジャンルが複数モードで登録されていても語彙プールは1回で十分）
+  var seenGenreIds = {};
+  var uniqueConfigs = [];
+  for (var gi = 0; gi < genreConfigs.length; gi++) {
+    var gid = parseGenreIdFromUrl(genreConfigs[gi].rakutenUrl);
+    if (!gid || seenGenreIds[gid]) continue;
+    seenGenreIds[gid] = true;
+    uniqueConfigs.push(genreConfigs[gi]);
+  }
+  genreConfigs = uniqueConfigs;
+  Logger.log('ユニークジャンル数: ' + genreConfigs.length);
+
   if (index >= genreConfigs.length) {
     Logger.log('語彙プール: 本日分は全ジャンル完了済み（index=' + index + ' / ' + genreConfigs.length + '）');
     return;
