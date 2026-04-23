@@ -51,11 +51,10 @@ const HIDDEN_GEM_URL_COUNT     = 6;         // URL列数 (URL1〜URL6)
 const HIDDEN_GEM_COLOR_SURVEYED = '#F0F0F0'; // 調査済み・非該当月
 const HIDDEN_GEM_COLOR_RECALL   = '#E8F0FE'; // 調査済み・再表示月
 
-// === Claude API ===
-const CLAUDE_API_URL     = 'https://api.anthropic.com/v1/messages';
-const CLAUDE_MODEL       = 'claude-sonnet-4-6';
-const CLAUDE_MAX_TOKENS  = 4000;
-const CLAUDE_API_VERSION = '2023-06-01';
+// === Gemini API ===
+const GEMINI_MODEL        = 'gemini-2.5-flash';
+const GEMINI_API_URL_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
+const GEMINI_MAX_TOKENS   = 4000;
 
 // === チェックポイント用ScriptPropertiesキー ===
 const WP_CHECKPOINT_DATE_KEY  = 'WP_CHECKPOINT_DATE';
@@ -70,7 +69,8 @@ function getConfig() {
   return {
     rakutenAppId   : props.getProperty('RAKUTEN_APP_ID'),
     discordWebhook : props.getProperty('DISCORD_WEBHOOK'),
-    claudeApiKey   : props.getProperty('CLAUDE_API_KEY'),
+    geminiApiKey   : props.getProperty('GEMINI_API_KEY'),
+    claudeApiKey   : props.getProperty('CLAUDE_API_KEY'),  // 後方互換
     keepaApiKey    : props.getProperty('KEEPA_API_KEY'),
   };
 }

@@ -53,11 +53,11 @@ function runHiddenGemAnalysis() {
       };
     });
 
-    // AI分析（Claude）
-    if (config.claudeApiKey) {
-      classified = analyzeWithClaude(config.claudeApiKey, gc.genreName, classified);
+    // AI分析（Gemini）
+    if (config.geminiApiKey) {
+      classified = analyzeWithGemini(config.geminiApiKey, gc.genreName, classified);
     } else {
-      Logger.log('CLAUDE_API_KEY 未設定。AI分析スキップ（ワードそのまま使用）');
+      Logger.log('GEMINI_API_KEY 未設定。AI分析スキップ（ワードそのまま使用）');
     }
 
     // 調査済み「永久非表示」除外
