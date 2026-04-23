@@ -421,6 +421,114 @@ function loadWordPoolByGenre(mode) {
 }
 
 /**
+ * 週1回実行: その週に語彙プールに登場した語を月次集計シートに反映
+ * - 今週の月曜〜日曜に「最終更新日」がある語彙プール行を抽出
+ * - (ジャンル, モード, ワード, 当月) 単位でユニーク化して月次シートに登場週数+1
+ * - 同週重複防止（最終更新週 === 今週月曜なら skip）
+ */
+function runMonthlyAggregation() {
+  var today = new Date();
+  var dayOfWeek = today.getDay();  // 0=Sun, 1=Mon, ..., 6=Sat
+  var daysFromMonday = (dayOfWeek === 0) ? 6 : dayOfWeek - 1;
+  var monday = new Date(today);
+  monday.setDate(today.getDate() - daysFromMonday);
+  monday.setHours(0, 0, 0, 0);
+  var sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+
+  var mondayStr = Utilities.formatDate(monday, 'Asia/Tokyo', 'yyyy-MM-dd');
+  var thisMonth = Utilities.formatDate(today, 'Asia/Tokyo', 'yyyy-MM');
+
+  Logger.log('=== 語彙プール月次集計開始: 週=' + mondayStr + ' 月=' + thisMonth + ' ===');
+
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var poolWs = ss.getSheetByName(SHEET_NAMES.WORD_POOL);
+  if (!poolWs || poolWs.getLastRow() < 2) {
+    Logger.log('語彙プールが空。集計スキップ');
+    return;
+  }
+
+  var poolData = poolWs.getRange(2, 1, poolWs.getLastRow() - 1, 9).getValues();
+
+  // 今週内に更新された (ジャンル, モード, ワード) ユニークセット
+  var thisWeekAppearances = {};
+  for (var i = 0; i < poolData.length; i++) {
+    var genre  = String(poolData[i][0] || '').trim();
+    var word   = String(poolData[i][1] || '').trim();
+    var cnFlag = poolData[i][4] === true;
+    var dmFlag = poolData[i][5] === true;
+    var lastUpd = poolData[i][7];
+    if (!genre || !word || !lastUpd) continue;
+
+    var lastUpdDate = (lastUpd instanceof Date) ? lastUpd : new Date(lastUpd);
+    if (lastUpdDate < monday || lastUpdDate > sunday) continue;
+
+    if (cnFlag) thisWeekAppearances[genre + '||' + MODES.CHINA + '||' + word] = true;
+    if (dmFlag) thisWeekAppearances[genre + '||' + MODES.DOMESTIC + '||' + word] = true;
+  }
+
+  Logger.log('今週出現 (genre,mode,word) ユニーク: ' + Object.keys(thisWeekAppearances).length);
+
+  var monthlyWs = ss.getSheetByName(SHEET_NAMES.WORD_POOL_MONTHLY);
+  if (!monthlyWs) monthlyWs = initWordPoolMonthlySheet(ss);
+
+  var mLastRow = monthlyWs.getLastRow();
+  var existingData = (mLastRow >= 2) ? monthlyWs.getRange(2, 1, mLastRow - 1, 6).getValues() : [];
+
+  // 既存行インデックス (genre||mode||word||yyyyMM → data index)
+  var existing = {};
+  for (var j = 0; j < existingData.length; j++) {
+    var g = String(existingData[j][0] || '').trim();
+    var m = String(existingData[j][1] || '').trim();
+    var w = String(existingData[j][2] || '').trim();
+    var ym = String(existingData[j][3] || '').trim();
+    if (!g || !m || !w || !ym) continue;
+    existing[g + '||' + m + '||' + w + '||' + ym] = j;
+  }
+
+  var newRows = [];
+  var updatedCount = 0;
+  var addedCount = 0;
+  var skippedCount = 0;
+
+  Object.keys(thisWeekAppearances).forEach(function(key) {
+    var parts = key.split('||');
+    var genre = parts[0], mode = parts[1], word = parts[2];
+    var lookupKey = genre + '||' + mode + '||' + word + '||' + thisMonth;
+
+    if (existing[lookupKey] !== undefined) {
+      var idx = existing[lookupKey];
+      var currentLastWeek = existingData[idx][5];
+      var currentLastWeekStr = (currentLastWeek instanceof Date)
+        ? Utilities.formatDate(currentLastWeek, 'Asia/Tokyo', 'yyyy-MM-dd')
+        : String(currentLastWeek || '').substring(0, 10);
+      if (currentLastWeekStr === mondayStr) {
+        skippedCount++;
+        return;  // 同週重複
+      }
+      existingData[idx][4] = Number(existingData[idx][4] || 0) + 1;
+      existingData[idx][5] = mondayStr;
+      updatedCount++;
+    } else {
+      newRows.push([genre, mode, word, thisMonth, 1, mondayStr]);
+      addedCount++;
+    }
+  });
+
+  // 既存一括書き戻し
+  if (updatedCount > 0 && existingData.length > 0) {
+    monthlyWs.getRange(2, 1, existingData.length, 6).setValues(existingData);
+  }
+  // 新規追加
+  if (newRows.length > 0) {
+    monthlyWs.getRange(monthlyWs.getLastRow() + 1, 1, newRows.length, 6).setValues(newRows);
+  }
+
+  Logger.log('=== 月次集計完了: 新規' + addedCount + '件 / 更新' + updatedCount + '件 / 同週スキップ' + skippedCount + '件 ===');
+}
+
+/**
  * 語彙プールのチェックポイントをリセット（手動実行用）
  */
 function resetWordPoolCheckpoint() {

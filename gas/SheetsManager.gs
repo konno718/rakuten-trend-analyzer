@@ -421,6 +421,16 @@ function migrateWordPoolToV2() {
 }
 
 /**
+ * 語彙プール月次集計シート初期化
+ * 列: ジャンル | モード | ワード | 年月 | 登場週数 | 最終更新週
+ */
+function initWordPoolMonthlySheet(ss) {
+  return getOrCreateSheet(ss, SHEET_NAMES.WORD_POOL_MONTHLY, [
+    'ジャンル', 'モード', 'ワード', '年月', '登場週数', '最終更新週'
+  ]);
+}
+
+/**
  * タグ辞書シート初期化（タグID → タググループ名 / タグ名）
  */
 function initTagDictSheet(ss) {

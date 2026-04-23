@@ -8,18 +8,19 @@ const MODES = {
 };
 
 const SHEET_NAMES = {
-  SETTINGS         : '設定',
-  RANKING_CHINA    : 'ランキング_中国輸入',
-  RANKING_DOMESTIC : 'ランキング_国内メーカー',
-  EXCLUDES         : '除外ワード',
-  CANDIDATES       : '除外候補',
-  SYNONYMS         : '同義語',
-  WORD_POOL        : '語彙プール',
-  TAG_DICT         : 'タグ辞書',
-  SURVEYED         : '調査済みワード',
-  SUGGEST_CHINA    : '推奨ワード_中国輸入',
-  SUGGEST_DOMESTIC : '推奨ワード_国内メーカー',
-  SUMMARY          : 'サマリー',
+  SETTINGS          : '設定',
+  RANKING_CHINA     : 'ランキング_中国輸入',
+  RANKING_DOMESTIC  : 'ランキング_国内メーカー',
+  EXCLUDES          : '除外ワード',
+  CANDIDATES        : '除外候補',
+  SYNONYMS          : '同義語',
+  WORD_POOL         : '語彙プール',
+  WORD_POOL_MONTHLY : '語彙プール月次',
+  TAG_DICT          : 'タグ辞書',
+  SURVEYED          : '調査済みワード',
+  SUGGEST_CHINA     : '推奨ワード_中国輸入',
+  SUGGEST_DOMESTIC  : '推奨ワード_国内メーカー',
+  SUMMARY           : 'サマリー',
 };
 
 const SCORE_RULES = {

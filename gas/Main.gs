@@ -106,6 +106,7 @@ function runSetup() {
   initTagDictSheet(ss);
   initSuggestSheet(ss, MODES.CHINA);
   initSuggestSheet(ss, MODES.DOMESTIC);
+  initWordPoolMonthlySheet(ss);
   migrateExcludeCandidatesTo5Col();
   migrateWordPoolToV2();
   seedDisposableWords();
@@ -141,7 +142,7 @@ function createDailyTrigger() {
  * 既存の同名ハンドラトリガーは削除してから再登録するので、重複はしない。
  */
 function createAnalysisTriggers() {
-  var handlers = ['runDailyCollection', 'runWordPoolStep', 'runHiddenGemAnalysis'];
+  var handlers = ['runDailyCollection', 'runWordPoolStep', 'runHiddenGemAnalysis', 'runMonthlyAggregation'];
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
     if (handlers.indexOf(triggers[i].getHandlerFunction()) >= 0) {
@@ -157,20 +158,25 @@ function createAnalysisTriggers() {
     ScriptApp.newTrigger('runWordPoolStep').timeBased().everyDays(1).atHour(h).create();
   }
 
-  // 07:00 お宝分析
+  // 07:00 推奨ワード分析
   ScriptApp.newTrigger('runHiddenGemAnalysis').timeBased().everyDays(1).atHour(7).create();
 
-  Logger.log('お宝分析トリガー登録完了:');
+  // 毎週日曜 23:00 月次集計
+  ScriptApp.newTrigger('runMonthlyAggregation')
+    .timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(23).create();
+
+  Logger.log('分析トリガー登録完了:');
   Logger.log('  01:00 runDailyCollection');
   Logger.log('  02-06:00 runWordPoolStep');
   Logger.log('  07:00 runHiddenGemAnalysis');
+  Logger.log('  日曜23:00 runMonthlyAggregation');
 }
 
 /**
  * 本システムの全トリガー削除（復旧・停止用）
  */
 function removeAnalysisTriggers() {
-  var handlers = ['runDailyCollection', 'runWordPoolStep', 'runHiddenGemAnalysis'];
+  var handlers = ['runDailyCollection', 'runWordPoolStep', 'runHiddenGemAnalysis', 'runMonthlyAggregation'];
   var triggers = ScriptApp.getProjectTriggers();
   var removed = 0;
   for (var i = 0; i < triggers.length; i++) {
