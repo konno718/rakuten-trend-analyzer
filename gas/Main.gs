@@ -42,8 +42,10 @@ function runDailyCollection() {
       if (items.length === 0) continue;
 
       // Step 2: 商品名整形のみ、商品レベル除外は HiddenGem で適用
+      // 設定シートG列(分析開始順位) 以降の商品のみ保存（データ量節約）
       var filtered = [];
       for (var k = 0; k < items.length; k++) {
+        if (gc.startRank && items[k].rank < gc.startRank) continue;
         var cleaned = cleanTitlePrefix(items[k].itemName || '');
         filtered.push({
           rank     : items[k].rank,
