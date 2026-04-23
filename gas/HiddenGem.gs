@@ -745,30 +745,33 @@ function writeHiddenGemResults(rows, dateStr, mode) {
     }
   }
 
-  // 2. 新規書き込み行を構築
+  // 2. 新規書き込み行を構築（1メインワード×1サブワードで最大5行に展開）
   var newValues = [];
   var newBg = [];
   for (var r = 0; r < rows.length; r++) {
     var item = rows[r];
-    var subStr = (item.subWords || []).slice(0, 10).join(', ');
-    var row = [
-      dateStr,
-      item.count || 0,
-      item.type || 'お宝候補',
-      item.genre || '',
-      item.word || '',
-      subStr,
-      item.evaluation || SCORE_RULES.HIDDEN_GEM.label,
-      item.newStatus || '既存',
-    ];
-    for (var p = 0; p < HIDDEN_GEM_URL_COUNT; p++) {
-      row.push(item.products && item.products[p] ? stripQueryFromUrl(item.products[p].itemUrl) : '');
-    }
-    newValues.push(row);
+    var subs = (item.subWords || []).slice(0, 5);  // 上位5サブまで
+    if (subs.length === 0) subs = [''];             // サブなしでも1行出す
+    for (var s = 0; s < subs.length; s++) {
+      var row = [
+        dateStr,
+        item.count || 0,
+        item.type || 'お宝候補',
+        item.genre || '',
+        item.word || '',       // メインワード（固定）
+        subs[s] || '',         // サブワード（1個）
+        item.evaluation || SCORE_RULES.HIDDEN_GEM.label,
+        item.newStatus || '既存',
+      ];
+      for (var p = 0; p < HIDDEN_GEM_URL_COUNT; p++) {
+        row.push(item.products && item.products[p] ? stripQueryFromUrl(item.products[p].itemUrl) : '');
+      }
+      newValues.push(row);
 
-    var rowBg = [];
-    for (var b = 0; b < totalCols; b++) rowBg.push(item.backgroundColor || null);
-    newBg.push(rowBg);
+      var rowBg = [];
+      for (var b = 0; b < totalCols; b++) rowBg.push(item.backgroundColor || null);
+      newBg.push(rowBg);
+    }
   }
 
   // 3. シートをヘッダ以外クリア
