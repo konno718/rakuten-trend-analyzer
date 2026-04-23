@@ -90,40 +90,40 @@ function processGenreForWordPool(gc, appId, dateStr, deadline) {
   var tagIdSet = {};
   var timeExceeded = function() { return deadline && new Date() >= deadline; };
 
-  // --- ソース1: ItemSearch 上位 ---
+  // --- ソース1: ItemSearch 上位 (分類=main: レビュー多い定番商品由来) ---
   for (var p = 1; p <= WORDPOOL_ITEM_PAGES; p++) {
     if (timeExceeded()) { Logger.log('  時間切れ(ItemSearch)'); break; }
     var items = fetchItemSearchByGenre(appId, genreId, '-reviewCount', 30, p);
     if (items.length === 0) break;
-    collectWordsFromItems(items, 'タイトル派生', wordRecords, tagIdSet, excludeMap, synonymMap);
+    collectWordsFromItems(items, 'タイトル派生', 'main', wordRecords, tagIdSet, excludeMap, synonymMap);
     Utilities.sleep(RAKUTEN_API_DELAY_MS);
   }
 
-  // --- ソース2: ItemRanking 最新 ---
+  // --- ソース2: ItemRanking 最新 (分類=main: 売れ筋商品由来) ---
   for (var r = 1; r <= WORDPOOL_RANKING_PAGES; r++) {
     if (timeExceeded()) { Logger.log('  時間切れ(ItemRanking)'); break; }
     var rankItems = fetchItemRankingByGenre(appId, genreId, r);
     if (rankItems.length === 0) break;
-    collectWordsFromItems(rankItems, 'ランキング派生(' + r + 'page)', wordRecords, tagIdSet, excludeMap, synonymMap);
+    collectWordsFromItems(rankItems, 'ランキング派生(' + r + 'page)', 'main', wordRecords, tagIdSet, excludeMap, synonymMap);
     Utilities.sleep(RAKUTEN_API_DELAY_MS);
   }
 
-  // --- ソース3: タグ辞書（1run あたり最大 WORDPOOL_TAG_FETCH_LIMIT 件） ---
+  // --- ソース3: タグ辞書 (分類=sub: 公式検索タグ) ---
   var tagIds = Object.keys(tagIdSet);
   if (tagIds.length > 0 && !timeExceeded()) {
     var tagNameMap = resolveTagNames(tagIds, appId, deadline);
     for (var t = 0; t < tagIds.length; t++) {
       var name = tagNameMap[tagIds[t]];
       if (!name) continue;
-      addWordRecord(wordRecords, name, '検索タグ');
+      addWordRecord(wordRecords, name, '検索タグ', 'sub');
     }
   }
 
-  // --- ソース4: 子ジャンル名 ---
+  // --- ソース4: 子ジャンル名 (分類=sub: カテゴリ階層) ---
   if (!timeExceeded()) {
     var subGenres = fetchGenreChildren(appId, genreId);
     for (var s = 0; s < subGenres.length; s++) {
-      addWordRecord(wordRecords, subGenres[s], 'サブジャンル');
+      addWordRecord(wordRecords, subGenres[s], 'サブジャンル', 'sub');
     }
     Utilities.sleep(RAKUTEN_API_DELAY_MS);
   }
@@ -137,13 +137,13 @@ function processGenreForWordPool(gc, appId, dateStr, deadline) {
 /**
  * 商品群からキーワード抽出 + タグID収集
  */
-function collectWordsFromItems(items, sourceLabel, wordRecords, tagIdSet, excludeMap, synonymMap) {
+function collectWordsFromItems(items, sourceLabel, classification, wordRecords, tagIdSet, excludeMap, synonymMap) {
   for (var i = 0; i < items.length; i++) {
     var itemName = items[i].itemName || '';
     var cleaned = cleanTitlePrefix(itemName);
     var kws = extractKeywords(cleaned, excludeMap, synonymMap);
     for (var k = 0; k < kws.length; k++) {
-      addWordRecord(wordRecords, kws[k], sourceLabel);
+      addWordRecord(wordRecords, kws[k], sourceLabel, classification);
     }
     if (items[i].tagIds && items[i].tagIds.length > 0) {
       for (var tg = 0; tg < items[i].tagIds.length; tg++) {
@@ -153,12 +153,12 @@ function collectWordsFromItems(items, sourceLabel, wordRecords, tagIdSet, exclud
   }
 }
 
-function addWordRecord(wordRecords, word, source) {
+function addWordRecord(wordRecords, word, source, classification) {
   var w = String(word || '').trim();
   if (!w || w.length < 2) return;
   var key = w + '||' + source;
   if (!wordRecords[key]) {
-    wordRecords[key] = { word: w, source: source, hits: 0 };
+    wordRecords[key] = { word: w, source: source, classification: classification || 'main', hits: 0 };
   }
   wordRecords[key].hits++;
 }
@@ -350,7 +350,7 @@ function updateWordPoolSheet(genreName, wordRecords, dateStr) {
   // 既存ジャンル内のレコードを読み込み
   var existing = {};
   if (ws.getLastRow() >= 2) {
-    var data = ws.getRange(2, 1, ws.getLastRow() - 1, 6).getValues();
+    var data = ws.getRange(2, 1, ws.getLastRow() - 1, 7).getValues();
     for (var i = 0; i < data.length; i++) {
       var g = String(data[i][0] || '').trim();
       var w = String(data[i][1] || '').trim();
@@ -369,37 +369,40 @@ function updateWordPoolSheet(genreName, wordRecords, dateStr) {
     if (existing[keys[k]]) {
       updates.push({ row: existing[keys[k]], hitsAdd: rec.hits });
     } else {
-      newRows.push([genreName, rec.word, rec.source, dateStr, dateStr, rec.hits]);
+      newRows.push([genreName, rec.word, rec.source, rec.classification || 'main', dateStr, dateStr, rec.hits]);
     }
   }
 
   if (newRows.length > 0) {
-    ws.getRange(ws.getLastRow() + 1, 1, newRows.length, 6).setValues(newRows);
+    ws.getRange(ws.getLastRow() + 1, 1, newRows.length, 7).setValues(newRows);
   }
   for (var u = 0; u < updates.length; u++) {
     var row = updates[u].row;
-    var curHits = Number(ws.getRange(row, 6).getValue() || 0);
-    ws.getRange(row, 5).setValue(dateStr);       // 最終更新日
-    ws.getRange(row, 6).setValue(curHits + updates[u].hitsAdd);  // ヒット数累積
+    var curHits = Number(ws.getRange(row, 7).getValue() || 0);
+    ws.getRange(row, 6).setValue(dateStr);       // 最終更新日
+    ws.getRange(row, 7).setValue(curHits + updates[u].hitsAdd);  // ヒット数累積
   }
 }
 
 /**
- * 語彙プール読み込み（ジャンル別ワードset）
- * @return {Object} { genreName: { word: true } }
+ * 語彙プール読み込み（ジャンル別ワード→分類map）
+ * 同じ (genre, word) に複数の由来で登録されていても、1つでも main があれば main が優先
+ * @return {Object} { genreName: { word: 'main'|'sub' } }
  */
 function loadWordPoolByGenre() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var ws = ss.getSheetByName(SHEET_NAMES.WORD_POOL);
   if (!ws || ws.getLastRow() < 2) return {};
-  var data = ws.getRange(2, 1, ws.getLastRow() - 1, 2).getValues();
+  var data = ws.getRange(2, 1, ws.getLastRow() - 1, 4).getValues();
   var pool = {};
   for (var i = 0; i < data.length; i++) {
     var genre = String(data[i][0] || '').trim();
     var word  = String(data[i][1] || '').trim();
+    var cls   = String(data[i][3] || 'main').trim();
     if (!genre || !word) continue;
     if (!pool[genre]) pool[genre] = {};
-    pool[genre][word] = true;
+    // main が一度でも出たら main 優先（sub は上書きしない）
+    if (pool[genre][word] !== 'main') pool[genre][word] = cls;
   }
   return pool;
 }

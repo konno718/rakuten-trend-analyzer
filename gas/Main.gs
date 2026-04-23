@@ -157,6 +157,7 @@ function runSetup() {
   initTagDictSheet(ss);
   initHiddenGemSheet(ss);
   migrateExcludeCandidatesTo5Col();
+  migrateWordPoolToV2();
   seedDisposableWords();
   Logger.log('セットアップ完了。設定シートにジャンルURL・モードを入力してください。');
 }
