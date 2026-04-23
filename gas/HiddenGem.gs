@@ -115,30 +115,32 @@ function runHiddenGemAnalysis() {
       }
     }
 
-    // 3区分判定（NEW判定後に決定）
-    //  定番ワード = pool main 該当 (isTreasure=false)
-    //  新着ワード = pool外 & 14日以内の新規 & 出現率>=2
-    //  レアワード = pool外 & 出現率=1 & ランキング上位50位以内
-    //  上記どれにも該当しないものは出力除外
+    // 月次シート参照で4区分判定
+    //  定番ワード  = 月次シートに登場履歴あり（継続的に記録されてる語）
+    //  新着ワード  = 月次未登場 & 14日以内の推奨ワード履歴になし
+    //  レアワード  = 月次未登場 & 出現数=1 & ランキング100位以内
+    //  トレンドワード = 上記どれにも該当しない（日次のみに出てるメイン）
+    var monthly = loadMonthlyWordSet(mode);
     var filtered = [];
     for (var k = 0; k < rows.length; k++) {
       var row = rows[k];
       var type = null;
-      if (!row.isTreasure) {
+      if (monthly[row.genre + '::' + row.word]) {
         type = '定番ワード';
-      } else if (row.isNew && row.count >= 2) {
+      } else if (row.isNew) {
         type = '新着ワード';
       } else if (row.count === 1 && row.topProductRank <= HIDDEN_GEM_RARE_RANK_MAX) {
         type = 'レアワード';
+      } else {
+        type = 'トレンドワード';
       }
-      if (!type) continue;
       row.type = type;
       filtered.push(row);
     }
 
-    // 最終ソート: 新着 > 定番 > レア、各区分内で出現回数desc
+    // 最終ソート: 新着 > トレンド > レア > 定番、各区分内で出現回数desc
     filtered.sort(function(a, b) {
-      var order = { '新着ワード': 0, '定番ワード': 1, 'レアワード': 2 };
+      var order = { '新着ワード': 0, 'トレンドワード': 1, 'レアワード': 2, '定番ワード': 3 };
       var oa = order[a.type] || 9;
       var ob = order[b.type] || 9;
       if (oa !== ob) return oa - ob;
@@ -435,6 +437,26 @@ function loadWordPoolHitsByGenre(mode) {
     map[genre][word] = (map[genre][word] || 0) + hits;
   }
   return map;
+}
+
+/**
+ * 語彙プール月次シートからモード別の (ジャンル::ワード) 登場セットを返す
+ * 定番ワード判定用
+ */
+function loadMonthlyWordSet(mode) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ws = ss.getSheetByName(SHEET_NAMES.WORD_POOL_MONTHLY);
+  if (!ws || ws.getLastRow() < 2) return {};
+  var data = ws.getRange(2, 1, ws.getLastRow() - 1, 3).getValues();
+  var set = {};
+  for (var i = 0; i < data.length; i++) {
+    var genre = String(data[i][0] || '').trim();
+    var m     = String(data[i][1] || '').trim();
+    var word  = String(data[i][2] || '').trim();
+    if (!genre || !word || m !== mode) continue;
+    set[genre + '::' + word] = true;
+  }
+  return set;
 }
 
 /**
