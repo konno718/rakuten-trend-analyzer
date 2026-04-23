@@ -14,6 +14,8 @@ const SHEET_NAMES = {
   EXCLUDES      : '除外ワード',
   CANDIDATES    : '除外候補',
   SYNONYMS      : '同義語',
+  COOC_CHINA    : '共起ワード_中国輸入',
+  COOC_DOMESTIC : '共起ワード_国内メーカー',
   SUMMARY       : 'サマリー',
 };
 
@@ -26,8 +28,20 @@ const SCORE_RULES = {
 const RANKING_TOP_N = 300;
 const PRODUCTS_PER_KEYWORD = 5;  // データシートに横展開する上位商品数
 
+// === フェーズ2: 共起分析 定数 ===
+const COOC_SEED_MIN_COUNT = 5;    // 種ワードの最小出現回数
+const COOC_MAX_SEEDS      = 30;   // 1モード当たり処理する種ワード最大数（GAS 6分制限対策）
+const SUGGEST_DELAY_MS    = 500;  // サジェスト間隔
+const SEARCH_API_DELAY_MS = 1100; // 商品検索API間隔（1 req/sec）
+const SUGGEST_URL         = 'https://search.rakuten.co.jp/suggest?q=';
+const SEARCH_API_URL      = 'https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706';
+
 function getDataSheetName(mode) {
   return mode === MODES.DOMESTIC ? SHEET_NAMES.DATA_DOMESTIC : SHEET_NAMES.DATA_CHINA;
+}
+
+function getCooccurrenceSheetName(mode) {
+  return mode === MODES.DOMESTIC ? SHEET_NAMES.COOC_DOMESTIC : SHEET_NAMES.COOC_CHINA;
 }
 
 // 除外ワード/除外候補シートの「有効」列 (1-based)

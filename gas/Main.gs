@@ -156,6 +156,94 @@ function runSetup() {
   Logger.log('セットアップ完了。設定シートにジャンルURL・モードを入力してください。');
 }
 
+// === フェーズ2: 共起分析 ===
+
+/**
+ * 共起分析メイン処理
+ * - 各モードのデータシートから種ワード（出現回数 >= COOC_SEED_MIN_COUNT）を選ぶ
+ * - 種ワードごとにサジェストで候補取得 → 修飾語抽出 → 商品検索APIでヒット数取得
+ * - 共起ワードシートに書き出す
+ * mode省略時は両モード実行
+ */
+function runCooccurrenceAnalysis(mode) {
+  if (!mode) {
+    runCooccurrenceAnalysis(MODES.CHINA);
+    runCooccurrenceAnalysis(MODES.DOMESTIC);
+    return;
+  }
+
+  var startTime = new Date();
+  var dateStr   = Utilities.formatDate(startTime, 'Asia/Tokyo', 'yyyy-MM-dd');
+  Logger.log('=== 共起分析開始: ' + mode + ' / ' + dateStr + ' ===');
+
+  var config = getConfig();
+  if (!config.rakutenAppId) throw new Error('RAKUTEN_APP_ID 未設定');
+
+  var seeds = readSeedsFromData(mode, COOC_SEED_MIN_COUNT, COOC_MAX_SEEDS);
+  Logger.log('種ワード: ' + seeds.length + '件');
+  if (seeds.length === 0) {
+    Logger.log('種ワードなし。データ_' + mode + ' に count>=' + COOC_SEED_MIN_COUNT + ' のワードが必要');
+    return;
+  }
+
+  var countCache = {};  // クエリ → count
+  var results = [];
+
+  for (var i = 0; i < seeds.length; i++) {
+    var seed = seeds[i];
+    Logger.log((i + 1) + '/' + seeds.length + ' ' + seed.keyword + '（出現' + seed.count + '回）');
+
+    var suggestions = fetchSuggest(seed.keyword);
+    Utilities.sleep(SUGGEST_DELAY_MS);
+    if (suggestions.length === 0) {
+      Logger.log('  サジェスト0件');
+      continue;
+    }
+
+    var seenModifiers = {};
+    for (var j = 0; j < suggestions.length; j++) {
+      var modifier = extractModifier(suggestions[j], seed.keyword);
+      if (!modifier || modifier.length < 2) continue;
+      if (seenModifiers[modifier]) continue;
+      seenModifiers[modifier] = true;
+
+      var pairQuery = seed.keyword + ' ' + modifier;
+      var itemCount = countCache[pairQuery];
+      if (itemCount === undefined) {
+        itemCount = fetchKeywordItemCount(config.rakutenAppId, pairQuery);
+        countCache[pairQuery] = itemCount;
+        Utilities.sleep(SEARCH_API_DELAY_MS);
+      }
+
+      // スコア: ランキング由来(seed.finalScore) + サジェスト有り固定100 + log10(count)*20
+      var suggestScore = 100;
+      var countScore   = itemCount > 0 ? Math.log(itemCount) / Math.LN10 * 20 : 0;
+      var totalScore   = Math.round((seed.finalScore + suggestScore + countScore) * 10) / 10;
+
+      results.push({
+        genre        : seed.genre,
+        mainWord     : seed.keyword,
+        modifier     : modifier,
+        suggestFound : true,
+        itemCount    : itemCount,
+        topRank      : seed.avgRank,
+        score        : totalScore,
+      });
+    }
+  }
+
+  if (results.length === 0) {
+    Logger.log('共起結果が0件');
+    return;
+  }
+
+  results.sort(function(a, b) { return b.score - a.score; });
+  writeCooccurrence(results, dateStr, mode);
+
+  var elapsed = (new Date() - startTime) / 1000;
+  Logger.log('=== 共起分析完了: ' + mode + ' / ' + results.length + 'ペア / ' + elapsed.toFixed(1) + '秒 ===');
+}
+
 // 自動トリガー登録（一度だけ実行）
 function createDailyTrigger() {
   var triggers = ScriptApp.getProjectTriggers();

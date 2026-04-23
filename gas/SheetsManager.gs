@@ -318,6 +318,88 @@ function writeSummary(text, dateStr) {
 }
 
 /**
+ * データシートから種ワード候補を読み取る（フェーズ2用）
+ * 条件: count >= minCount、最新日付、出現回数 desc でソート、上限 maxSeeds
+ * @return {Array<{keyword, count, avgRank, finalScore, genre}>}
+ */
+function readSeedsFromData(mode, minCount, maxSeeds) {
+  minCount = minCount || COOC_SEED_MIN_COUNT;
+  maxSeeds = maxSeeds || COOC_MAX_SEEDS;
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ws = ss.getSheetByName(getDataSheetName(mode));
+  if (!ws || ws.getLastRow() < 2) return [];
+
+  var data = ws.getDataRange().getValues();
+  // 列: 日付|ジャンル|代表キーワード|類義ワード|出現回数|平均順位|スコア|分類|新規参入|...
+  // 最新日付を特定
+  var latestDate = null;
+  for (var i = 1; i < data.length; i++) {
+    var d = data[i][0];
+    if (!d) continue;
+    var t = (d instanceof Date) ? d.getTime() : new Date(d).getTime();
+    if (!latestDate || t > latestDate) latestDate = t;
+  }
+  if (!latestDate) return [];
+
+  var seeds = [];
+  for (var j = 1; j < data.length; j++) {
+    var row = data[j];
+    if (!row[0]) continue;
+    var rowTime = (row[0] instanceof Date) ? row[0].getTime() : new Date(row[0]).getTime();
+    if (rowTime !== latestDate) continue;
+    var count = Number(row[4] || 0);
+    if (count < minCount) continue;
+    seeds.push({
+      genre      : String(row[1] || ''),
+      keyword    : String(row[2] || ''),
+      count      : count,
+      avgRank    : Number(row[5] || 0),
+      finalScore : Number(row[6] || 0),
+    });
+  }
+  // 出現回数 desc → スコア desc
+  seeds.sort(function(a, b) {
+    if (b.count !== a.count) return b.count - a.count;
+    return b.finalScore - a.finalScore;
+  });
+  return seeds.slice(0, maxSeeds);
+}
+
+/**
+ * 共起ワードシート（フェーズ2）の取得・初期化
+ */
+function getOrCreateCooccurrenceSheet(ss, sheetName) {
+  var headers = ['日付', 'ジャンル', '主ワード', '修飾語', 'サジェスト検出', '商品数(楽天市場)', '種ワード最上位ランク', '合算スコア', 'メモ'];
+  return getOrCreateSheet(ss, sheetName, headers);
+}
+
+/**
+ * 共起ワードシートに書き込む
+ */
+function writeCooccurrence(results, dateStr, mode) {
+  if (!results || results.length === 0) return;
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ws = getOrCreateCooccurrenceSheet(ss, getCooccurrenceSheetName(mode));
+  var rows = [];
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    rows.push([
+      dateStr,
+      r.genre || '',
+      r.mainWord,
+      r.modifier,
+      r.suggestFound ? '○' : '',
+      r.itemCount || 0,
+      r.topRank || '',
+      r.score || 0,
+      r.memo || '',
+    ]);
+  }
+  ws.getRange(ws.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  Logger.log('[' + mode + '] 共起ワード書き込み ' + rows.length + '行');
+}
+
+/**
  * モード別データシートから過去daysBack日以内のキーワードMapを取得
  * 新規参入判定に使う
  */
