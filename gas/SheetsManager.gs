@@ -131,22 +131,33 @@ function migrateExcludeCandidatesTo5Col() {
   }
   var lastRow = ws.getLastRow();
   var oldData = (lastRow >= 2) ? ws.getRange(2, 1, lastRow - 1, 4).getValues() : [];
+
   ws.clear();
+  // 旧C列(種類)に残っているデータ入力規則を全解除
+  ws.getRange(1, 1, ws.getMaxRows(), ws.getMaxColumns()).clearDataValidations();
+
   ws.getRange(1, 1, 1, 5).setValues([['中国輸入\n有効', '国内会社\n有効', 'ワード', '種類', 'メモ']])
     .setBackground('#4A86E8').setFontColor('#FFFFFF').setFontWeight('bold');
   ws.setFrozenRows(1);
-  if (oldData.length === 0) {
+
+  if (oldData.length > 0) {
+    var newData = [];
+    for (var i = 0; i < oldData.length; i++) {
+      var enabled = oldData[i][0] === true;
+      newData.push([enabled, enabled, oldData[i][1], oldData[i][2], oldData[i][3]]);
+    }
+    ws.getRange(2, 1, newData.length, 5).setValues(newData);
+    ws.getRange(2, 1, newData.length, 2).insertCheckboxes();
+    Logger.log('除外候補 ' + newData.length + '行を5列構造に移行しました');
+  } else {
     Logger.log('除外候補シートを5列構造に初期化しました（データなし）');
-    return;
   }
-  var newData = [];
-  for (var i = 0; i < oldData.length; i++) {
-    var enabled = oldData[i][0] === true;
-    newData.push([enabled, enabled, oldData[i][1], oldData[i][2], oldData[i][3]]);
-  }
-  ws.getRange(2, 1, newData.length, 5).setValues(newData);
-  ws.getRange(2, 1, newData.length, 2).insertCheckboxes();
-  Logger.log('除外候補 ' + newData.length + '行を5列構造に移行しました');
+
+  // 新 D列(種類) に再度データ入力規則を設定（ブランド・自動検出も含む）
+  var typeRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['!検索タグ', '!マーケ', '!品質', 'デザイン', '機能', '季節タグ', '状態', '汎用語', '補助語', '自動検出', 'ブランド'], true)
+    .setAllowInvalid(true).build();
+  ws.getRange(2, 4, Math.max(1, ws.getMaxRows() - 1), 1).setDataValidation(typeRule);
 }
 
 /**
