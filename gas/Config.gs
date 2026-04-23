@@ -13,6 +13,7 @@ const SHEET_NAMES = {
   DATA_DOMESTIC : 'データ_国内メーカー',
   EXCLUDES      : '除外ワード',
   CANDIDATES    : '除外候補',
+  SYNONYMS      : '同義語',
   SUMMARY       : 'サマリー',
 };
 

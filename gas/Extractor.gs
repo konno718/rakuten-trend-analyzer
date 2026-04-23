@@ -49,6 +49,29 @@ var CATEGORY_EXCLUDES_CHINA = [
 var CATEGORY_EXCLUDES_DOMESTIC = [];
 
 /**
+ * 同義語シートから { 同義語 → 正規ワード } のマップを読む
+ * シート構成: A=正規ワード, B=同義語（カンマ/読点区切り）
+ */
+function loadSynonymMap() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ws = ss.getSheetByName(SHEET_NAMES.SYNONYMS);
+  if (!ws || ws.getLastRow() < 2) return {};
+  var data = ws.getDataRange().getValues();
+  var map = {};
+  for (var i = 1; i < data.length; i++) {
+    var canonical = String(data[i][0] || '').trim();
+    var synStr    = String(data[i][1] || '').trim();
+    if (!canonical || !synStr) continue;
+    var syns = synStr.split(/[,，、]/);
+    for (var j = 0; j < syns.length; j++) {
+      var s = syns[j].trim();
+      if (s) map[s] = canonical;
+    }
+  }
+  return map;
+}
+
+/**
  * 除外ワードシートからモードに応じた有効ワードを読む
  * シート構成: A=中国輸入有効, B=国内会社有効, C=ワード, D=種類, E=メモ
  */
@@ -79,13 +102,17 @@ function isProductExcluded(itemName, mode) {
   return false;
 }
 
-function extractKeywords(itemName, excludeMap) {
+function extractKeywords(itemName, excludeMap, synonymMap) {
   var name = itemName.substring(0, 100);
   var parts = name.split(SEPARATORS_RE);
   var tokens = [];
   for (var i = 0; i < parts.length; i++) {
     var t = parts[i].trim();
-    if (t.length >= 2) tokens.push(t);
+    if (t.length >= 2) {
+      // 同義語は抽出段階で正規ワードに置換
+      if (synonymMap && synonymMap[t]) t = synonymMap[t];
+      tokens.push(t);
+    }
   }
 
   var keywords = [];
@@ -102,10 +129,11 @@ function extractKeywords(itemName, excludeMap) {
     }
   }
 
-  // 複合語（隣接する2トークンを結合）
+  // 複合語（隣接する2トークンを結合・正規化済み）
   for (var k = 0; k < tokens.length - 1; k++) {
     var compound = tokens[k] + tokens[k + 1];
     if (compound.length >= 4 && compound.length <= 15) {
+      if (synonymMap && synonymMap[compound]) compound = synonymMap[compound];
       if (!seen[compound] && !(excludeMap && excludeMap[compound])) {
         seen[compound] = true;
         keywords.push(compound);
@@ -116,20 +144,20 @@ function extractKeywords(itemName, excludeMap) {
   return keywords;
 }
 
-function processItems(items, excludeMap, mode) {
+function processItems(items, excludeMap, synonymMap, mode) {
   return items.map(function(item) {
     var cleanedName = cleanTitlePrefix(item.itemName);
     var excluded = isProductExcluded(cleanedName, mode);
     return {
       rank      : item.rank,
       itemCode  : item.itemCode,
-      itemName  : cleanedName,           // クリーンアップ後を本体として扱う
-      itemNameOriginal : item.itemName,  // デバッグ用に元タイトル保持
+      itemName  : cleanedName,
+      itemNameOriginal : item.itemName,
       itemUrl   : item.itemUrl,
       itemPrice : item.itemPrice,
       genreId   : item.genreId,
       excluded  : excluded,
-      keywords  : excluded ? [] : extractKeywords(cleanedName, excludeMap),
+      keywords  : excluded ? [] : extractKeywords(cleanedName, excludeMap, synonymMap),
     };
   });
 }

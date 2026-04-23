@@ -16,18 +16,21 @@ function runDailyCollection() {
 
   var ss = SpreadsheetApp.openById(SHEET_ID);
   initExcludeWordsSheet(ss);
+  initSynonymSheet(ss);
 
   var genreConfigs = readGenreConfigs();
   if (genreConfigs.length === 0) {
     throw new Error('有効なジャンル設定がありません。設定シートを確認してください。');
   }
 
-  // モード別除外ワード
+  // モード別除外ワード + 同義語マップ
   var excludeMaps = {};
   excludeMaps[MODES.CHINA]    = loadExcludeWords(MODES.CHINA);
   excludeMaps[MODES.DOMESTIC] = loadExcludeWords(MODES.DOMESTIC);
+  var synonymMap = loadSynonymMap();
   Logger.log('除外ワード 中国輸入:' + Object.keys(excludeMaps[MODES.CHINA]).length
-             + ' 国内:' + Object.keys(excludeMaps[MODES.DOMESTIC]).length);
+             + ' 国内:' + Object.keys(excludeMaps[MODES.DOMESTIC]).length
+             + ' / 同義語:' + Object.keys(synonymMap).length);
 
   // モード別 過去キーワード
   var pastMaps = {};
@@ -57,8 +60,11 @@ function runDailyCollection() {
       var items = fetchRakutenRanking(config.rakutenAppId, genreId, RANKING_TOP_N);
       if (items.length === 0) continue;
 
-      var processed = processItems(items, excludeMaps[gc.mode], gc.mode);
-      var results   = aggregateKeywords(processed, gc.genreName, dateStr);
+      var processed = processItems(items, excludeMaps[gc.mode], synonymMap, gc.mode);
+      var rawResults = aggregateKeywords(processed, gc.genreName, dateStr);
+      // 同一商品セットのワードを代表+類義ワードにグループ化
+      var results = groupByProductFingerprint(rawResults);
+      Logger.log('  グループ化: ' + rawResults.length + ' → ' + results.length + ' グループ');
 
       for (var j = 0; j < results.length; j++) {
         var key = results[j].genre + '::' + results[j].keyword;
@@ -126,13 +132,16 @@ function runTest() {
   }
 
   var excludeMap = loadExcludeWords(gc.mode);
-  var processed  = processItems(items, excludeMap, gc.mode);
-  var results    = aggregateKeywords(processed, gc.genreName, 'test');
+  var synonymMap = loadSynonymMap();
+  var processed  = processItems(items, excludeMap, synonymMap, gc.mode);
+  var rawResults = aggregateKeywords(processed, gc.genreName, 'test');
+  var results    = groupByProductFingerprint(rawResults);
 
-  Logger.log('キーワード数: ' + results.length);
+  Logger.log('キーワード数(グループ化後): ' + results.length + ' / 元: ' + rawResults.length);
   var top = results.slice(0, 10);
   for (var i = 0; i < top.length; i++) {
-    Logger.log('  [' + top[i].classification + '] ' + top[i].keyword + ' - ' + top[i].count + '回 スコア:' + top[i].finalScore);
+    var syn = (top[i].synonyms && top[i].synonyms.length > 0) ? ' [類義: ' + top[i].synonyms.slice(0, 3).join(', ') + (top[i].synonyms.length > 3 ? '...' : '') + ']' : '';
+    Logger.log('  [' + top[i].classification + '] ' + top[i].keyword + ' - ' + top[i].count + '回 スコア:' + top[i].finalScore + syn);
   }
   Logger.log('テスト完了');
 }
@@ -142,6 +151,7 @@ function runSetup() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   createSettingsTemplate(ss);
   initExcludeWordsSheet(ss);
+  initSynonymSheet(ss);
   migrateExcludeCandidatesTo5Col();
   Logger.log('セットアップ完了。設定シートにジャンルURL・モードを入力してください。');
 }

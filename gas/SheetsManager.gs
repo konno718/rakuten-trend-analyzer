@@ -161,21 +161,23 @@ function migrateExcludeCandidatesTo5Col() {
 }
 
 /**
- * データシート（1ワード1行・上位5商品を横展開）の取得・初期化
+ * データシート（1グループ1行・上位5商品URLを横展開）の取得・初期化
+ * 商品名列は持たない（ユーザー運用でURLだけ見れば十分という方針）
  */
 function getOrCreateDataSheet(ss, sheetName) {
   var headers = [
-    '日付', 'ジャンル', 'キーワード', '出現回数', '平均順位', 'スコア', '分類', '新規参入',
+    '日付', 'ジャンル', '代表キーワード', '類義ワード',
+    '出現回数', '平均順位', 'スコア', '分類', '新規参入',
   ];
   for (var p = 1; p <= PRODUCTS_PER_KEYWORD; p++) {
-    headers.push(p + '位順位', p + '位商品', p + '位URL');
+    headers.push(p + '位順位', p + '位URL');
   }
   return getOrCreateSheet(ss, sheetName, headers);
 }
 
 /**
  * モード別データシートに書き込む
- * 1ワード1行・上位N商品を横展開
+ * 1グループ1行・上位N商品URLを横展開
  */
 function writeData(results, dateStr, newEntrantMap, mode) {
   if (!results || results.length === 0) return;
@@ -192,14 +194,18 @@ function writeData(results, dateStr, newEntrantMap, mode) {
     }[r.classification] || r.classification;
     var key = r.genre + '::' + r.keyword;
     var isNew = newEntrantMap && newEntrantMap[key];
+    var synonymsStr = (r.synonyms || []).join(', ');
 
-    var row = [dateStr, r.genre, r.keyword, r.count, r.avgRank, r.finalScore, classLabel, isNew ? '🆕新規' : ''];
+    var row = [
+      dateStr, r.genre, r.keyword, synonymsStr,
+      r.count, r.avgRank, r.finalScore, classLabel, isNew ? '🆕新規' : '',
+    ];
     var products = r.products || [];
     for (var p = 0; p < PRODUCTS_PER_KEYWORD; p++) {
       if (p < products.length) {
-        row.push(products[p].rank, products[p].itemName, products[p].itemUrl);
+        row.push(products[p].rank, products[p].itemUrl);
       } else {
-        row.push('', '', '');
+        row.push('', '');
       }
     }
     rows.push(row);
@@ -209,6 +215,20 @@ function writeData(results, dateStr, newEntrantMap, mode) {
     ws.getRange(ws.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
     Logger.log('[' + mode + '] データシート書き込み ' + rows.length + '行');
   }
+}
+
+/**
+ * 同義語シートを初期化（空枠のみ）
+ * A=正規ワード, B=同義語（カンマ/読点区切り）, C=メモ
+ */
+function initSynonymSheet(ss) {
+  var ws = getOrCreateSheet(ss, SHEET_NAMES.SYNONYMS, ['正規ワード', '同義語（カンマ区切り）', 'メモ']);
+  if (ws.getLastRow() > 1) return;
+  var samples = [
+    ['ゴミ箱', 'ダストワゴン,ダストボックス,ごみ箱', ''],
+    ['ベッド', 'ベット', ''],
+  ];
+  ws.getRange(2, 1, samples.length, 3).setValues(samples);
 }
 
 /**

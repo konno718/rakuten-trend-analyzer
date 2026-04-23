@@ -73,6 +73,49 @@ function aggregateKeywords(processedItems, genreName, dateStr) {
   return results;
 }
 
+/**
+ * 同一商品セット（= 同一URLセット）を指すキーワードをグループ化し、
+ * 代表1ワード + 類義ワード配列 に集約する。
+ * 代表選定: count desc → keyword.length asc
+ */
+function groupByProductFingerprint(results) {
+  var groups = {};
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    var urls = (r.products || []).map(function(p){ return p.itemUrl; });
+    urls.sort();
+    var fp = urls.join('|');
+    if (!groups[fp]) groups[fp] = [];
+    groups[fp].push(r);
+  }
+  var merged = [];
+  var fpKeys = Object.keys(groups);
+  for (var k = 0; k < fpKeys.length; k++) {
+    var bucket = groups[fpKeys[k]];
+    bucket.sort(function(a, b) {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.keyword.length - b.keyword.length;
+    });
+    var rep = bucket[0];
+    var synonyms = [];
+    for (var j = 1; j < bucket.length; j++) synonyms.push(bucket[j].keyword);
+    merged.push({
+      date           : rep.date,
+      genre          : rep.genre,
+      keyword        : rep.keyword,
+      synonyms       : synonyms,
+      count          : rep.count,
+      avgRank        : rep.avgRank,
+      finalScore     : rep.finalScore,
+      classification : rep.classification,
+      products       : rep.products,
+      isNew          : rep.isNew,
+    });
+  }
+  merged.sort(function(a, b) { return b.finalScore - a.finalScore; });
+  return merged;
+}
+
 function detectHighFrequencyCandidates(allResults, totalGenres) {
   var kwGenreCount = {};
   for (var i = 0; i < allResults.length; i++) {
