@@ -451,7 +451,9 @@ function loadHiddenGemHistory(daysBack, mode) {
 }
 
 /**
- * モード別推奨ワードシートに行追加（蓄積式・背景色セット）
+ * モード別推奨ワードシートに書き込み
+ * 同日の既存行があれば削除してから新規行を追加（同日再実行で結果が最新だけ残る）
+ * 過去日分は残す（NEW判定用履歴として使う）
  */
 function writeHiddenGemResults(rows, dateStr, mode) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
@@ -460,33 +462,71 @@ function writeHiddenGemResults(rows, dateStr, mode) {
   if (!ws) ws = initSuggestSheet(ss, mode);
 
   var totalCols = 8 + HIDDEN_GEM_URL_COUNT;
-  var values = [];
-  var bgColors = [];
-  for (var i = 0; i < rows.length; i++) {
-    var r = rows[i];
-    var subStr = (r.subWords || []).slice(0, 10).join(', ');
-    var row = [
-      dateStr,
-      r.count || 0,
-      r.type || 'お宝候補',
-      r.genre || '',
-      r.word || '',
-      subStr,
-      r.evaluation || SCORE_RULES.HIDDEN_GEM.label,
-      r.newStatus || '既存',
-    ];
-    for (var p = 0; p < HIDDEN_GEM_URL_COUNT; p++) {
-      row.push(r.products && r.products[p] ? stripQueryFromUrl(r.products[p].itemUrl) : '');
-    }
-    values.push(row);
 
-    var rowBg = [];
-    for (var b = 0; b < totalCols; b++) rowBg.push(r.backgroundColor || null);
-    bgColors.push(rowBg);
+  // 1. 既存データを全読み込み
+  var lastRow = ws.getLastRow();
+  var keepData = [];
+  var keepBg = [];
+  if (lastRow >= 2) {
+    var allData = ws.getRange(2, 1, lastRow - 1, totalCols).getValues();
+    var allBg   = ws.getRange(2, 1, lastRow - 1, totalCols).getBackgrounds();
+    for (var i = 0; i < allData.length; i++) {
+      var d = allData[i][0];
+      if (!d) continue;
+      var rowDateStr = (d instanceof Date)
+        ? Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy-MM-dd')
+        : String(d).substring(0, 10);
+      if (rowDateStr === dateStr) continue;  // 同日分は除外（上書き対象）
+      keepData.push(allData[i]);
+      keepBg.push(allBg[i]);
+    }
   }
 
-  var startRow = ws.getLastRow() + 1;
-  ws.getRange(startRow, 1, values.length, totalCols).setValues(values);
-  ws.getRange(startRow, 1, bgColors.length, totalCols).setBackgrounds(bgColors);
-  Logger.log('[' + mode + '] 推奨ワードシートに ' + values.length + '行書き込み');
+  // 2. 新規書き込み行を構築
+  var newValues = [];
+  var newBg = [];
+  for (var r = 0; r < rows.length; r++) {
+    var item = rows[r];
+    var subStr = (item.subWords || []).slice(0, 10).join(', ');
+    var row = [
+      dateStr,
+      item.count || 0,
+      item.type || 'お宝候補',
+      item.genre || '',
+      item.word || '',
+      subStr,
+      item.evaluation || SCORE_RULES.HIDDEN_GEM.label,
+      item.newStatus || '既存',
+    ];
+    for (var p = 0; p < HIDDEN_GEM_URL_COUNT; p++) {
+      row.push(item.products && item.products[p] ? stripQueryFromUrl(item.products[p].itemUrl) : '');
+    }
+    newValues.push(row);
+
+    var rowBg = [];
+    for (var b = 0; b < totalCols; b++) rowBg.push(item.backgroundColor || null);
+    newBg.push(rowBg);
+  }
+
+  // 3. シートをヘッダ以外クリア
+  if (lastRow > 1) {
+    ws.getRange(2, 1, lastRow - 1, totalCols).clearContent();
+    var emptyBg = [];
+    for (var eb = 0; eb < lastRow - 1; eb++) {
+      var rowEmpty = [];
+      for (var ec = 0; ec < totalCols; ec++) rowEmpty.push(null);
+      emptyBg.push(rowEmpty);
+    }
+    if (emptyBg.length > 0) ws.getRange(2, 1, emptyBg.length, totalCols).setBackgrounds(emptyBg);
+  }
+
+  // 4. 過去日履歴 + 新規 を連結して書き込み
+  var merged = keepData.concat(newValues);
+  var mergedBg = keepBg.concat(newBg);
+  if (merged.length > 0) {
+    ws.getRange(2, 1, merged.length, totalCols).setValues(merged);
+    ws.getRange(2, 1, mergedBg.length, totalCols).setBackgrounds(mergedBg);
+  }
+
+  Logger.log('[' + mode + '] 推奨ワード更新: 過去日' + keepData.length + '行+当日' + newValues.length + '行');
 }
