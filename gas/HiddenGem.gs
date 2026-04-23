@@ -59,6 +59,7 @@ function runHiddenGemAnalysis() {
   [MODES.CHINA, MODES.DOMESTIC].forEach(function(mode) {
     var rows = rowsByMode[mode];
     if (rows.length === 0) return;
+
     // NEW判定（モード別の推奨ワードシート過去14日履歴）
     var past = loadHiddenGemHistory(HIDDEN_GEM_NEW_DAYS, mode);
     for (var r = 0; r < rows.length; r++) {
@@ -66,16 +67,50 @@ function runHiddenGemAnalysis() {
       var p = past[key];
       if (!p) {
         rows[r].newStatus = 'NEW!';
+        rows[r].isNew = true;
       } else {
         var pSet = {};
         (p.subWords || []).forEach(function(s){ pSet[s] = true; });
         var hasNewSub = false;
         (rows[r].subWords || []).forEach(function(s){ if (!pSet[s]) hasNewSub = true; });
         rows[r].newStatus = hasNewSub ? '🔄更新' : '既存';
+        rows[r].isNew = false;
       }
     }
-    writeHiddenGemResults(rows, dateStr, mode);
-    totalWritten += rows.length;
+
+    // 3区分判定（NEW判定後に決定）
+    //  定番ワード = pool main 該当 (isTreasure=false)
+    //  新着ワード = pool外 & 14日以内の新規 & 出現率>=2
+    //  レアワード = pool外 & 出現率=1 & ランキング上位50位以内
+    //  上記どれにも該当しないものは出力除外
+    var filtered = [];
+    for (var k = 0; k < rows.length; k++) {
+      var row = rows[k];
+      var type = null;
+      if (!row.isTreasure) {
+        type = '定番ワード';
+      } else if (row.isNew && row.count >= 2) {
+        type = '新着ワード';
+      } else if (row.count === 1 && row.topProductRank <= HIDDEN_GEM_RARE_RANK_MAX) {
+        type = 'レアワード';
+      }
+      if (!type) continue;
+      row.type = type;
+      filtered.push(row);
+    }
+
+    // 最終ソート: 新着 > 定番 > レア、各区分内で出現回数desc
+    filtered.sort(function(a, b) {
+      var order = { '新着ワード': 0, '定番ワード': 1, 'レアワード': 2 };
+      var oa = order[a.type] || 9;
+      var ob = order[b.type] || 9;
+      if (oa !== ob) return oa - ob;
+      if (b.count !== a.count) return b.count - a.count;
+      return a.topProductRank - b.topProductRank;
+    });
+
+    writeHiddenGemResults(filtered, dateStr, mode);
+    totalWritten += filtered.length;
   });
 
   var elapsed = (new Date() - startTime) / 1000;
@@ -175,37 +210,27 @@ function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, c
     // 上位商品URL（rank昇順）
     var topProducts = g.products.slice().sort(function(a, b) { return a.rank - b.rank; });
 
-    // 3区分判定
-    //  pool main 該当           → 定番ワード
-    //  pool外 × 複数商品共起    → 新着ワード
-    //  pool外 × 1商品のみ       → レアワード
-    var cnt = g.products.length;
-    var type;
-    if (!g.isTreasure) {
-      type = '定番ワード';
-    } else if (cnt >= 2) {
-      type = '新着ワード';
-    } else {
-      type = 'レアワード';
-    }
-
+    // type はNEW判定後に最終決定するので、ここでは isTreasure + topRank 情報を付けて保持
+    var topRank = (topProducts.length > 0) ? topProducts[0].rank : 999;
     rows.push({
-      genre       : gc.genreName,
-      word        : mw,
-      subWords    : subs,
-      count       : cnt,
-      type        : type,
-      evaluation  : SCORE_RULES.HIDDEN_GEM.label,
-      products    : topProducts.slice(0, HIDDEN_GEM_URL_COUNT),
+      genre          : gc.genreName,
+      word           : mw,
+      subWords       : subs,
+      count          : g.products.length,
+      isTreasure     : g.isTreasure,
+      topProductRank : topRank,
+      evaluation     : SCORE_RULES.HIDDEN_GEM.label,
+      products       : topProducts.slice(0, HIDDEN_GEM_URL_COUNT),
       backgroundColor: bg,
     });
   }
 
-  // ソート: 出現回数desc → 新着ワード優先 → 定番ワード → レアワード
+  // ソート: 出現回数desc、treasure優先（最終順位は区分判定後に再ソート）
   rows.sort(function(a, b) {
     if (b.count !== a.count) return b.count - a.count;
-    var order = { '新着ワード': 0, '定番ワード': 1, 'レアワード': 2 };
-    return (order[a.type] || 9) - (order[b.type] || 9);
+    if (a.isTreasure && !b.isTreasure) return -1;
+    if (!a.isTreasure && b.isTreasure) return 1;
+    return 0;
   });
   return rows.slice(0, HIDDEN_GEM_MAX_PER_GENRE);
 }
