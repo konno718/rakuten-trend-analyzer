@@ -47,16 +47,17 @@ function runWordPoolStep() {
 
   Logger.log('=== 語彙プール更新: index=' + index + ' から ===');
 
+  var deadline = new Date(startTime.getTime() + WORDPOOL_STEP_TIME_LIMIT_MS);
+
   while (index < genreConfigs.length) {
-    var elapsed = new Date() - startTime;
-    if (elapsed > WORDPOOL_STEP_TIME_LIMIT_MS) {
-      Logger.log('時間切れ (' + (elapsed / 1000).toFixed(1) + '秒)。次回トリガーで index=' + index + ' から継続');
+    if (new Date() >= deadline) {
+      Logger.log('時間切れ。次回トリガーで index=' + index + ' から継続');
       break;
     }
 
     var gc = genreConfigs[index];
     try {
-      processGenreForWordPool(gc, config.rakutenAppId, dateStr);
+      processGenreForWordPool(gc, config.rakutenAppId, dateStr, deadline);
     } catch(e) {
       Logger.log(gc.genreName + ' エラー: ' + e);
     }
@@ -71,9 +72,10 @@ function runWordPoolStep() {
 
 /**
  * 1ジャンル分の語彙プール更新
- * 4ソース: ItemSearch上位/ItemRanking(daily,weekly,monthly)/タグ辞書/子ジャンル名
+ * 4ソース: ItemSearch / ItemRanking / タグ辞書 / 子ジャンル名
+ * deadline を渡すと途中で時間切れ判定して早期リターン（部分結果は書き込み済）
  */
-function processGenreForWordPool(gc, appId, dateStr) {
+function processGenreForWordPool(gc, appId, dateStr, deadline) {
   var genreId = parseGenreIdFromUrl(gc.rakutenUrl);
   if (!genreId) {
     Logger.log('ジャンルID取得失敗: ' + gc.rakutenUrl);
@@ -84,29 +86,32 @@ function processGenreForWordPool(gc, appId, dateStr) {
 
   var excludeMap = loadExcludeWords(gc.mode);
   var synonymMap = loadSynonymMap();
-  var wordRecords = {};  // key = word + '||' + source → {word, source, hits}
+  var wordRecords = {};
   var tagIdSet = {};
+  var timeExceeded = function() { return deadline && new Date() >= deadline; };
 
-  // --- ソース1: ItemSearch 標準ソート上位（レビュー多い実在商品） ---
+  // --- ソース1: ItemSearch 上位 ---
   for (var p = 1; p <= WORDPOOL_ITEM_PAGES; p++) {
+    if (timeExceeded()) { Logger.log('  時間切れ(ItemSearch)'); break; }
     var items = fetchItemSearchByGenre(appId, genreId, '-reviewCount', 30, p);
     if (items.length === 0) break;
     collectWordsFromItems(items, 'タイトル派生', wordRecords, tagIdSet, excludeMap, synonymMap);
     Utilities.sleep(RAKUTEN_API_DELAY_MS);
   }
 
-  // --- ソース2: ItemRanking 最新ランキング（複数ページで60位まで） ---
+  // --- ソース2: ItemRanking 最新 ---
   for (var r = 1; r <= WORDPOOL_RANKING_PAGES; r++) {
+    if (timeExceeded()) { Logger.log('  時間切れ(ItemRanking)'); break; }
     var rankItems = fetchItemRankingByGenre(appId, genreId, r);
     if (rankItems.length === 0) break;
     collectWordsFromItems(rankItems, 'ランキング派生(' + r + 'page)', wordRecords, tagIdSet, excludeMap, synonymMap);
     Utilities.sleep(RAKUTEN_API_DELAY_MS);
   }
 
-  // --- ソース3: タグ辞書 ---
+  // --- ソース3: タグ辞書（1run あたり最大 WORDPOOL_TAG_FETCH_LIMIT 件） ---
   var tagIds = Object.keys(tagIdSet);
-  if (tagIds.length > 0) {
-    var tagNameMap = resolveTagNames(tagIds, appId);
+  if (tagIds.length > 0 && !timeExceeded()) {
+    var tagNameMap = resolveTagNames(tagIds, appId, deadline);
     for (var t = 0; t < tagIds.length; t++) {
       var name = tagNameMap[tagIds[t]];
       if (!name) continue;
@@ -115,13 +120,15 @@ function processGenreForWordPool(gc, appId, dateStr) {
   }
 
   // --- ソース4: 子ジャンル名 ---
-  var subGenres = fetchGenreChildren(appId, genreId);
-  for (var s = 0; s < subGenres.length; s++) {
-    addWordRecord(wordRecords, subGenres[s], 'サブジャンル');
+  if (!timeExceeded()) {
+    var subGenres = fetchGenreChildren(appId, genreId);
+    for (var s = 0; s < subGenres.length; s++) {
+      addWordRecord(wordRecords, subGenres[s], 'サブジャンル');
+    }
+    Utilities.sleep(RAKUTEN_API_DELAY_MS);
   }
-  Utilities.sleep(RAKUTEN_API_DELAY_MS);
 
-  // --- 語彙プールシートに反映 ---
+  // --- 語彙プールシートに反映（部分でも書き込み） ---
   updateWordPoolSheet(gc.genreName, wordRecords, dateStr);
 
   Logger.log('[' + gc.genreName + '] 語彙プール完了: ' + Object.keys(wordRecords).length + 'レコード');
@@ -250,8 +257,9 @@ function fetchGenreChildren(appId, genreId) {
 /**
  * タグID配列 → タグ名Map解決（タグ辞書シートをキャッシュとして利用）
  * キャッシュになければTagSearch APIで取得して辞書に追加
+ * deadlineを渡すと時間切れで早期break（未解決タグは次回以降のrunで補完）
  */
-function resolveTagNames(tagIds, appId) {
+function resolveTagNames(tagIds, appId, deadline) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var ws = ss.getSheetByName(SHEET_NAMES.TAG_DICT);
   if (!ws) ws = initTagDictSheet(ss);
@@ -273,13 +281,15 @@ function resolveTagNames(tagIds, appId) {
     return resultMap;
   }
 
-  // 未解決タグをTagSearchで問い合わせ（カンマ区切り複数対応）
-  // TagSearch は tagId ごとに1回、最大1000件など仕様不明のため1個ずつ
-  // GAS時間制限対策で最大50個に限定
-  var fetchLimit = Math.min(unresolved.length, 50);
+  // 1run あたり WORDPOOL_TAG_FETCH_LIMIT 件まで（GAS 6分制限対策）
+  var fetchLimit = Math.min(unresolved.length, WORDPOOL_TAG_FETCH_LIMIT);
   var todayStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
   var newRows = [];
   for (var u = 0; u < fetchLimit; u++) {
+    if (deadline && new Date() >= deadline) {
+      Logger.log('  TagSearch 時間切れ (' + u + '/' + fetchLimit + ')');
+      break;
+    }
     var tagId = unresolved[u];
     var fetched = fetchTagInfo(appId, tagId);
     if (fetched && fetched.tagName) {

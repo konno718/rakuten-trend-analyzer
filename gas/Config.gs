@@ -39,9 +39,10 @@ const RAKUTEN_TAG_SEARCH   = RAKUTEN_API_BASE + '/IchibaTag/Search/20140222';
 const RAKUTEN_API_DELAY_MS = 1100;  // 1 req/sec 安全マージン
 
 // === 語彙プール構築 ===
-const WORDPOOL_STEP_TIME_LIMIT_MS = 5 * 60 * 1000;  // 5分で中断→次回継続
+const WORDPOOL_STEP_TIME_LIMIT_MS  = 5 * 60 * 1000;  // 5分で中断→次回継続
 const WORDPOOL_ITEM_PAGES          = 2;              // ItemSearch取得ページ数 (30件×2=60商品)
 const WORDPOOL_RANKING_PAGES       = 2;              // ItemRanking取得ページ数 (30件×2=60位まで)
+const WORDPOOL_TAG_FETCH_LIMIT     = 20;             // 1ジャンル1runあたりのTagSearch呼び出し上限
 
 // === お宝分析 ===
 const HIDDEN_GEM_MAX_PER_GENRE = 50;        // ジャンル毎の出力上限
