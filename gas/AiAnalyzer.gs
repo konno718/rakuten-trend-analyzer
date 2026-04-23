@@ -98,30 +98,43 @@ function analyzeGeminiBatch(apiKey, genreName, classified, batch) {
 }
 
 /**
- * ワード群を Gemini で4分類 (カテゴリ/装飾語/対象/ブランド)
- * 入力: { genreName, words: [string] }
- * 出力: [{word, type}] (type: 'カテゴリ'|'装飾語'|'対象'|'ブランド')
+ * ワード群を Gemini で分類
+ * 中国輸入モードは「液物/食べ物/医薬品/医療機器」も追加分類対象、国内は「医薬品」のみ
+ * 入力: genreName, words, mode
+ * 出力: [{word, type}] type: 'カテゴリ'|'ブランド'|'装飾語'|'対象'|'食べ物'|'液物'|'医薬品'|'医療機器'
  */
-function categorizeWordsWithGemini(apiKey, genreName, words) {
+function categorizeWordsWithGemini(apiKey, genreName, words, mode) {
   if (!apiKey || words.length === 0) return [];
 
-  var prompt = [
-    '楽天ランキング「' + genreName + '」ジャンルの商品から抽出されたワード群を分析してください。',
-    '',
-    '各ワードを以下の4分類のどれか1つに判定してください:',
+  var modeLabel = (mode === MODES.DOMESTIC) ? '国内メーカーモード' : '中国輸入モード';
+  var classes = [
     '- カテゴリ: 具体的な商品種別 (例: ゴミ箱, 充電器, ベビーカー, ベッド)',
     '- ブランド: メーカー名・商品ブランド名 (例: 山崎実業, ロイヤルカナン, ニトリ, パンパース)',
     '- 装飾語: 形容詞・属性・特性 (例: おしゃれ, 軽量, 防水, 北欧, シンプル)',
     '- 対象: 利用者・場面・用途・状況 (例: 新生児, 出産祝い, 子供, 女性, ペット用)',
+    '- 医薬品: 第1類/第2類医薬品・サプリ・栄養補助食品系 (例: サプリ, ビタミン, プロテイン, 錠剤)',
+  ];
+  if (mode !== MODES.DOMESTIC) {
+    // 中国輸入モードは食べ物・液物・医療機器も別分類
+    classes.push('- 食べ物: 食品全般 (例: フード, おやつ, 餌, ペットフード, お菓子)');
+    classes.push('- 液物: 液体製品 (例: シャンプー, 洗剤, 化粧水, ジュース)');
+    classes.push('- 医療機器: 医療用具 (例: コンタクトレンズ, カラコン, 補聴器)');
+  }
+
+  var prompt = [
+    '楽天ランキング「' + genreName + '」ジャンル ' + modeLabel + ' から抽出されたワード群を分析してください。',
+    '',
+    '各ワードを以下の分類のどれか1つに判定してください:',
+  ].concat(classes).concat([
     '',
     '判定が難しい場合は「カテゴリ」として返してください。',
     '',
     '出力はJSON配列のみ（説明文なし）:',
-    '[{"word":"...","type":"カテゴリ|ブランド|装飾語|対象"}, ...]',
+    '[{"word":"...","type":"..."}, ...]',
     '',
     '入力:',
     JSON.stringify(words)
-  ].join('\n');
+  ]).join('\n');
 
   var url = GEMINI_API_URL_BASE + GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(apiKey);
   var payload = {
