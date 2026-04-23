@@ -161,60 +161,72 @@ function migrateExcludeCandidatesTo5Col() {
 }
 
 /**
- * データシート（1グループ1行・上位5商品URLを横展開）の取得・初期化
- * 商品名列は持たない（ユーザー運用でURLだけ見れば十分という方針）
+ * URLからクエリ文字列を除去（?rafcid=... 等）
  */
-function getOrCreateDataSheet(ss, sheetName) {
-  var headers = [
-    '日付', 'ジャンル', '代表キーワード', '類義ワード',
-    '出現回数', '平均順位', 'スコア', '分類', '新規参入',
-  ];
-  for (var p = 1; p <= PRODUCTS_PER_KEYWORD; p++) {
-    headers.push(p + '位順位', p + '位URL');
-  }
-  return getOrCreateSheet(ss, sheetName, headers);
+function stripQueryFromUrl(url) {
+  if (!url) return '';
+  var s = String(url);
+  var idx = s.indexOf('?');
+  return idx >= 0 ? s.substring(0, idx) : s;
 }
 
 /**
- * モード別データシートに書き込む
- * 1グループ1行・上位N商品URLを横展開
+ * ランキングシート（商品単位・フィルタ後）の取得・初期化
+ * 列: 日付 | ジャンル | 順位 | 商品名 | URL | タグID
  */
-function writeData(results, dateStr, newEntrantMap, mode) {
-  if (!results || results.length === 0) return;
+function getOrCreateRankingSheet(ss, sheetName) {
+  return getOrCreateSheet(ss, sheetName, ['日付', 'ジャンル', '順位', '商品名', 'URL', 'タグID']);
+}
+
+/**
+ * モード別ランキングシートに書き込む（商品単位）
+ * items: [{rank, itemName, itemUrl, tagIds}]
+ */
+function writeRankingItems(items, dateStr, genreName, mode) {
+  if (!items || items.length === 0) return;
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var ws = getOrCreateDataSheet(ss, getDataSheetName(mode));
-
-  var rows = [];
-  for (var i = 0; i < results.length; i++) {
-    var r = results[i];
-    var classLabel = {
-      hidden_gem: SCORE_RULES.HIDDEN_GEM.label,
-      trending  : SCORE_RULES.TRENDING.label,
-      saturated : SCORE_RULES.SATURATED.label,
-    }[r.classification] || r.classification;
-    var key = r.genre + '::' + r.keyword;
-    var isNew = newEntrantMap && newEntrantMap[key];
-    var synonymsStr = (r.synonyms || []).join(', ');
-
-    var row = [
-      dateStr, r.genre, r.keyword, synonymsStr,
-      r.count, r.avgRank, r.finalScore, classLabel, isNew ? '🆕新規' : '',
+  var ws = getOrCreateRankingSheet(ss, getRankingSheetName(mode));
+  var rows = items.map(function(item) {
+    return [
+      dateStr,
+      genreName,
+      item.rank,
+      String(item.itemName || ''),
+      stripQueryFromUrl(item.itemUrl),
+      (item.tagIds || []).join('|'),
     ];
-    var products = r.products || [];
-    for (var p = 0; p < PRODUCTS_PER_KEYWORD; p++) {
-      if (p < products.length) {
-        row.push(products[p].rank, products[p].itemUrl);
-      } else {
-        row.push('', '');
-      }
-    }
-    rows.push(row);
-  }
+  });
+  ws.getRange(ws.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
+  Logger.log('[' + mode + ':' + genreName + '] ランキング ' + rows.length + '件書き込み');
+}
 
-  if (rows.length > 0) {
-    ws.getRange(ws.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
-    Logger.log('[' + mode + '] データシート書き込み ' + rows.length + '行');
+/**
+ * 指定モード+ジャンル+日付 のランキング商品リストを読み込む
+ */
+function readRankingProducts(mode, genreName, dateStr) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ws = ss.getSheetByName(getRankingSheetName(mode));
+  if (!ws || ws.getLastRow() < 2) return [];
+  var data = ws.getDataRange().getValues();
+  var products = [];
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    if (!row[0]) continue;
+    var rowDate = (row[0] instanceof Date)
+      ? Utilities.formatDate(row[0], 'Asia/Tokyo', 'yyyy-MM-dd')
+      : String(row[0]).substring(0, 10);
+    if (rowDate !== dateStr) continue;
+    if (String(row[1]).trim() !== genreName) continue;
+    var tagIdStr = String(row[5] || '');
+    var tagIds = tagIdStr ? tagIdStr.split('|').filter(function(x){return x;}) : [];
+    products.push({
+      rank     : Number(row[2] || 0),
+      itemName : String(row[3] || ''),
+      itemUrl  : String(row[4] || ''),
+      tagIds   : tagIds,
+    });
   }
+  return products;
 }
 
 /**
@@ -482,13 +494,13 @@ function loadSurveyedWords() {
 }
 
 /**
- * モード別データシートから過去daysBack日以内のキーワードMapを取得
- * 新規参入判定に使う
+ * モード別ランキングシートから過去daysBack日以内の商品Map（rank参照用）
+ * 新規参入判定など過去履歴参照に使う
  */
 function getPastKeywordMap(daysBack, mode) {
   daysBack = daysBack || 30;
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var ws = ss.getSheetByName(getDataSheetName(mode));
+  var ws = ss.getSheetByName(getRankingSheetName(mode));
   if (!ws || ws.getLastRow() < 2) return {};
   var data = ws.getDataRange().getValues();
   var cutoff = new Date();

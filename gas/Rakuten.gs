@@ -41,6 +41,7 @@ function fetchRakutenRanking(appId, genreId, maxItems) {
           itemName  : item.itemName  || '',
           itemUrl   : item.itemUrl   || '',
           itemPrice : item.itemPrice || 0,
+          tagIds    : item.tagIds    || [],
           genreId   : genreId,
         });
         currentRank++;
