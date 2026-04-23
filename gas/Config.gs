@@ -51,7 +51,7 @@ const HIDDEN_GEM_NEW_DAYS      = 14;        // 初出から何日間 NEW! 表示
 const HIDDEN_GEM_URL_COUNT     = 6;         // URL列数 (URL1〜URL6)
 const HIDDEN_GEM_COLOR_SURVEYED = '#F0F0F0'; // 調査済み・非該当月
 const HIDDEN_GEM_COLOR_RECALL   = '#E8F0FE'; // 調査済み・再表示月
-const HIDDEN_GEM_RARE_RANK_MAX  = 50;        // レアワード条件: ランキング上位50位以内
+const HIDDEN_GEM_RARE_RANK_MAX  = 100;       // レアワード条件: ランキング上位100位以内
 
 // === Gemini API ===
 const GEMINI_MODEL        = 'gemini-2.5-flash-lite';  // シンプルなJSON整形用に高速版
