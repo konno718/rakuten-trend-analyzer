@@ -38,6 +38,13 @@ function runHiddenGemAnalysis() {
   rowsByMode[MODES.CHINA]    = [];
   rowsByMode[MODES.DOMESTIC] = [];
 
+  // 除外候補検出用のモード別アキュムレータ
+  //   keywordGenres: {キーワード: 出現ジャンル数}
+  //   genreCount: そのモードで処理したジャンル数
+  var modeAccum = {};
+  modeAccum[MODES.CHINA]    = { keywordGenres: {}, genreCount: 0 };
+  modeAccum[MODES.DOMESTIC] = { keywordGenres: {}, genreCount: 0 };
+
   for (var gi = 0; gi < genreConfigs.length; gi++) {
     if (new Date() >= deadline) {
       Logger.log('時間切れ。未処理ジャンル ' + (genreConfigs.length - gi) + ' は次回');
@@ -50,10 +57,27 @@ function runHiddenGemAnalysis() {
       continue;
     }
 
-    var rows = analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, config, currentMonth);
+    modeAccum[gc.mode].genreCount++;
+    var rows = analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, config, currentMonth, modeAccum[gc.mode].keywordGenres);
     rowsByMode[gc.mode] = rowsByMode[gc.mode].concat(rows);
     Logger.log('[' + gc.genreName + '] 出力 ' + rows.length + '行');
   }
+
+  // 除外候補自動検出（全ジャンル処理後、モード別に 30% 閾値で判定）
+  [MODES.CHINA, MODES.DOMESTIC].forEach(function(mode) {
+    var accum = modeAccum[mode];
+    if (accum.genreCount < 2) return;
+    var threshold = Math.max(2, Math.ceil(accum.genreCount * 0.3));
+    var candidates = [];
+    Object.keys(accum.keywordGenres).forEach(function(kw) {
+      if (accum.keywordGenres[kw] >= threshold) candidates.push(kw);
+    });
+    if (candidates.length > 0) {
+      writeExcludeCandidates(candidates, dateStr, mode);
+      Logger.log('[' + mode + '] 除外候補 ' + candidates.length
+                 + '件検出 (閾値' + threshold + '/' + accum.genreCount + 'ジャンル)');
+    }
+  });
 
   var totalWritten = 0;
   [MODES.CHINA, MODES.DOMESTIC].forEach(function(mode) {
@@ -118,16 +142,20 @@ function runHiddenGemAnalysis() {
 }
 
 /**
- * 1ジャンルの商品群を分析してお宝分析行を生成
+ * 1ジャンルの商品群を分析して推奨ワード行を生成
+ * keywordGenreAccum を渡すとそのジャンル内の出現キーワード（ユニーク）を +1 して返す
+ * （除外候補の横断検出用）
  */
-function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, config, currentMonth) {
+function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, config, currentMonth, keywordGenreAccum) {
   var excludeMap = loadExcludeWords(gc.mode);
   var synonymMap = loadSynonymMap();
   var genrePool = wordPool[gc.genreName] || {};
   var genreHits = poolHits[gc.genreName] || {};
 
+  var genreUniqueKws = {};  // ジャンル内でユニーク出現した語（除外候補検出用）
+
   // 各商品を分析
-  var analyses = [];  // [{product, primaryMain, subs, unknowns, allWords}]
+  var analyses = [];
   for (var i = 0; i < products.length; i++) {
     var p = products[i];
     var kws = extractKeywords(p.itemName, excludeMap, synonymMap);
@@ -138,6 +166,7 @@ function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, c
     for (var k = 0; k < kws.length; k++) {
       var w = kws[k];
       if (disposables[w]) continue;  // 消耗品ワードは落とす
+      genreUniqueKws[w] = true;       // ジャンル内ユニークで集計
       var cls = genrePool[w];
       if (cls === 'main') mains.push(w);
       else if (cls === 'sub') subs.push(w);
@@ -232,6 +261,14 @@ function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, c
     if (!a.isTreasure && b.isTreasure) return 1;
     return 0;
   });
+
+  // 呼び出し元の除外候補アキュムレータにジャンル内ユニーク語を加算
+  if (keywordGenreAccum) {
+    Object.keys(genreUniqueKws).forEach(function(kw) {
+      keywordGenreAccum[kw] = (keywordGenreAccum[kw] || 0) + 1;
+    });
+  }
+
   return rows.slice(0, HIDDEN_GEM_MAX_PER_GENRE);
 }
 
