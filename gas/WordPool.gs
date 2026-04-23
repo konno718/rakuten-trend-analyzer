@@ -345,29 +345,32 @@ function updateWordPoolSheet(genreName, wordRecords, dateStr, mode) {
 
   var modeColIdx = (mode === MODES.DOMESTIC) ? 5 : 4;  // 0-index: E=4, F=5
 
-  // 既存ジャンル内のレコードを読み込み
+  // 全データを一度だけ読み込み（1 getValues コール）
+  var lastRow = ws.getLastRow();
+  var allData = (lastRow >= 2) ? ws.getRange(2, 1, lastRow - 1, 9).getValues() : [];
+
+  // 既存行インデックス構築（同ジャンル内）
   var existing = {};
-  if (ws.getLastRow() >= 2) {
-    var data = ws.getRange(2, 1, ws.getLastRow() - 1, 9).getValues();
-    for (var i = 0; i < data.length; i++) {
-      var g = String(data[i][0] || '').trim();
-      var w = String(data[i][1] || '').trim();
-      var s = String(data[i][2] || '').trim();
-      if (g === genreName && w && s) {
-        existing[w + '||' + s] = i + 2;
-      }
-    }
+  for (var i = 0; i < allData.length; i++) {
+    var g = String(allData[i][0] || '').trim();
+    var w = String(allData[i][1] || '').trim();
+    var s = String(allData[i][2] || '').trim();
+    if (g === genreName && w && s) existing[w + '||' + s] = i;  // 0-based index in allData
   }
 
+  var hasUpdates = false;
   var newRows = [];
-  var updates = [];  // {row, hitsAdd}
   var keys = Object.keys(wordRecords);
   for (var k = 0; k < keys.length; k++) {
     var rec = wordRecords[keys[k]];
-    if (existing[keys[k]]) {
-      updates.push({ row: existing[keys[k]], hitsAdd: rec.hits });
+    if (existing[keys[k]] !== undefined) {
+      var idx = existing[keys[k]];
+      // メモリ内で更新
+      allData[idx][modeColIdx] = true;
+      allData[idx][7] = dateStr;  // 最終更新日 (H列)
+      allData[idx][8] = Number(allData[idx][8] || 0) + rec.hits;  // ヒット数 (I列)
+      hasUpdates = true;
     } else {
-      // 新規行: 該当モード列のみTRUE
       var isChina = (mode !== MODES.DOMESTIC);
       newRows.push([
         genreName, rec.word, rec.source, rec.classification || 'main',
@@ -376,17 +379,16 @@ function updateWordPoolSheet(genreName, wordRecords, dateStr, mode) {
     }
   }
 
+  // 既存行の一括書き戻し（変更があれば全行バルク書き込み）
+  if (hasUpdates && allData.length > 0) {
+    ws.getRange(2, 1, allData.length, 9).setValues(allData);
+  }
+
+  // 新規行追加
   if (newRows.length > 0) {
     var startRow = ws.getLastRow() + 1;
     ws.getRange(startRow, 1, newRows.length, 9).setValues(newRows);
     ws.getRange(startRow, 5, newRows.length, 2).insertCheckboxes();
-  }
-  for (var u = 0; u < updates.length; u++) {
-    var row = updates[u].row;
-    ws.getRange(row, modeColIdx + 1).setValue(true);  // 該当モード列 TRUE
-    var curHits = Number(ws.getRange(row, 9).getValue() || 0);
-    ws.getRange(row, 8).setValue(dateStr);            // 最終更新日
-    ws.getRange(row, 9).setValue(curHits + updates[u].hitsAdd);
   }
 }
 
