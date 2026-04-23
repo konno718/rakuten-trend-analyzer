@@ -347,44 +347,64 @@ function initSurveyedSheet(ss) {
 }
 
 /**
- * 語彙プールシート初期化
- * 列: ジャンル, ワード, 由来, 分類, 初出日, 最終更新日, ヒット数
- *   分類: main (ItemSearch/ItemRanking由来=メインワード候補) / sub (TagSearch/GenreSearch由来=サブワード候補)
+ * 語彙プールシート初期化（v3: モード別 有効フラグ2列構造）
+ * 列: ジャンル, ワード, 由来, 分類, 中国輸入有効, 国内会社有効, 初出日, 最終更新日, ヒット数
+ *   分類: main (ItemSearch/ItemRanking由来) / sub (TagSearch/GenreSearch由来)
+ *   有効: 該当モードの収集で登録された場合 TRUE
  */
 function initWordPoolSheet(ss) {
   return getOrCreateSheet(ss, SHEET_NAMES.WORD_POOL, [
-    'ジャンル', 'ワード', '由来', '分類', '初出日', '最終更新日', 'ヒット数'
+    'ジャンル', 'ワード', '由来', '分類', '中国輸入\n有効', '国内会社\n有効', '初出日', '最終更新日', 'ヒット数'
   ]);
 }
 
 /**
- * 既存の語彙プール (6列構造) を 7列構造 (分類列付き) にマイグレーション
- * 由来に基づいて分類を自動推定
+ * 旧6列/7列 語彙プール → 9列 (モード別2列付き) にマイグレーション
  */
 function migrateWordPoolToV2() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var ws = ss.getSheetByName(SHEET_NAMES.WORD_POOL);
   if (!ws) { initWordPoolSheet(ss); return; }
   var headers = ws.getRange(1, 1, 1, Math.max(1, ws.getLastColumn())).getValues()[0];
-  if (String(headers[3] || '').trim() === '分類') {
-    Logger.log('語彙プールは既に新構造');
+  // v3 判定: E列=中国輸入有効
+  var headerE = String(headers[4] || '').trim();
+  if (headerE.indexOf('中国輸入') >= 0) {
+    Logger.log('語彙プールは既に v3 構造');
     return;
   }
+
   var lastRow = ws.getLastRow();
-  if (lastRow < 1) return;
-  var oldData = (lastRow >= 2) ? ws.getRange(2, 1, lastRow - 1, 6).getValues() : [];
+  var lastCol = ws.getLastColumn();
+  var oldData = (lastRow >= 2) ? ws.getRange(2, 1, lastRow - 1, lastCol).getValues() : [];
+
   ws.clear();
-  ws.getRange(1, 1, 1, 7).setValues([['ジャンル', 'ワード', '由来', '分類', '初出日', '最終更新日', 'ヒット数']])
+  ws.getRange(1, 1, 1, 9).setValues([['ジャンル', 'ワード', '由来', '分類', '中国輸入\n有効', '国内会社\n有効', '初出日', '最終更新日', 'ヒット数']])
     .setBackground('#4A86E8').setFontColor('#FFFFFF').setFontWeight('bold');
   ws.setFrozenRows(1);
+
   if (oldData.length === 0) return;
+  // 旧構造を新構造に詰め替え
+  // 旧6列: [ジャンル, ワード, 由来, 初出日, 最終更新日, ヒット数]
+  // 旧7列: [ジャンル, ワード, 由来, 分類, 初出日, 最終更新日, ヒット数]
   var newData = oldData.map(function(r) {
-    var src = String(r[2] || '');
-    var cls = (src.indexOf('タグ') >= 0 || src.indexOf('サブジャンル') >= 0) ? 'sub' : 'main';
-    return [r[0], r[1], r[2], cls, r[3], r[4], r[5]];
+    var genre = r[0];
+    var word  = r[1];
+    var src   = String(r[2] || '');
+    var hasClassCol = (oldData[0].length >= 7);
+    var cls, first, last, hits;
+    if (hasClassCol) {
+      cls = r[3] || ((src.indexOf('タグ') >= 0 || src.indexOf('サブジャンル') >= 0) ? 'sub' : 'main');
+      first = r[4]; last = r[5]; hits = r[6];
+    } else {
+      cls = (src.indexOf('タグ') >= 0 || src.indexOf('サブジャンル') >= 0) ? 'sub' : 'main';
+      first = r[3]; last = r[4]; hits = r[5];
+    }
+    // 両モードをTRUEに設定（元の由来は不明なので両方有効扱い）
+    return [genre, word, src, cls, true, true, first, last, hits];
   });
-  ws.getRange(2, 1, newData.length, 7).setValues(newData);
-  Logger.log('語彙プール ' + newData.length + '行を分類列付き構造に移行');
+  ws.getRange(2, 1, newData.length, 9).setValues(newData);
+  ws.getRange(2, 5, newData.length, 2).insertCheckboxes();
+  Logger.log('語彙プール ' + newData.length + '行を v3 構造(モード別有効列) に移行');
 }
 
 /**

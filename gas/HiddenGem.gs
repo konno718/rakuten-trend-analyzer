@@ -15,12 +15,18 @@ function runHiddenGemAnalysis() {
 
   var config = getConfig();
   var disposables = loadDisposableWords();
-  var wordPool    = loadWordPoolByGenre();
-  var poolHits    = loadWordPoolHitsByGenre();
-  var surveyed    = loadSurveyedWords();
+  // モード別語彙プール（該当モードの有効フラグTRUEの行のみ）
+  var wordPool = {};
+  wordPool[MODES.CHINA]    = loadWordPoolByGenre(MODES.CHINA);
+  wordPool[MODES.DOMESTIC] = loadWordPoolByGenre(MODES.DOMESTIC);
+  var poolHits = {};
+  poolHits[MODES.CHINA]    = loadWordPoolHitsByGenre(MODES.CHINA);
+  poolHits[MODES.DOMESTIC] = loadWordPoolHitsByGenre(MODES.DOMESTIC);
+  var surveyed = loadSurveyedWords();
 
   Logger.log('消耗品 ' + Object.keys(disposables).length
-             + ' / 語彙プール ' + Object.keys(wordPool).length + 'ジャンル'
+             + ' / 語彙プール 中国輸入:' + Object.keys(wordPool[MODES.CHINA]).length + 'ジャンル'
+             + ' 国内:' + Object.keys(wordPool[MODES.DOMESTIC]).length + 'ジャンル'
              + ' / 調査済み ' + Object.keys(surveyed).length);
 
   var genreConfigs = readGenreConfigs();
@@ -58,7 +64,7 @@ function runHiddenGemAnalysis() {
     }
 
     modeAccum[gc.mode].genreCount++;
-    var rows = analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, config, currentMonth, modeAccum[gc.mode].keywordGenres);
+    var rows = analyzeGenre(gc, products, wordPool[gc.mode] || {}, poolHits[gc.mode] || {}, disposables, surveyed, config, currentMonth, modeAccum[gc.mode].keywordGenres);
     rowsByMode[gc.mode] = rowsByMode[gc.mode].concat(rows);
     Logger.log('[' + gc.genreName + '] 出力 ' + rows.length + '行');
   }
@@ -394,19 +400,23 @@ function aiBatchMainWord(apiKey, genreName, treasures, batch) {
 }
 
 /**
- * 語彙プールのジャンル別ヒット数Map
+ * 語彙プール(v3)のモード別・ジャンル別ヒット数Map
+ * 該当モードの有効フラグ=TRUE行のみ集計
+ * @param {string} mode - 指定モード (省略時は全行)
  */
-function loadWordPoolHitsByGenre() {
+function loadWordPoolHitsByGenre(mode) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var ws = ss.getSheetByName(SHEET_NAMES.WORD_POOL);
   if (!ws || ws.getLastRow() < 2) return {};
-  var data = ws.getRange(2, 1, ws.getLastRow() - 1, 7).getValues();
+  var data = ws.getRange(2, 1, ws.getLastRow() - 1, 9).getValues();
+  var modeColIdx = (mode === MODES.DOMESTIC) ? 5 : 4;
   var map = {};
   for (var i = 0; i < data.length; i++) {
     var genre = String(data[i][0] || '').trim();
     var word  = String(data[i][1] || '').trim();
-    var hits  = Number(data[i][6] || 0);
+    var hits  = Number(data[i][8] || 0);
     if (!genre || !word) continue;
+    if (mode && data[i][modeColIdx] !== true) continue;
     if (!map[genre]) map[genre] = {};
     map[genre][word] = (map[genre][word] || 0) + hits;
   }

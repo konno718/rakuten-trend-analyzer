@@ -28,17 +28,9 @@ function runWordPoolStep() {
   }
 
   var genreConfigs = readGenreConfigs();
-  // ジャンルID重複を除去（同じジャンルが複数モードで登録されていても語彙プールは1回で十分）
-  var seenGenreIds = {};
-  var uniqueConfigs = [];
-  for (var gi = 0; gi < genreConfigs.length; gi++) {
-    var gid = parseGenreIdFromUrl(genreConfigs[gi].rakutenUrl);
-    if (!gid || seenGenreIds[gid]) continue;
-    seenGenreIds[gid] = true;
-    uniqueConfigs.push(genreConfigs[gi]);
-  }
-  genreConfigs = uniqueConfigs;
-  Logger.log('ユニークジャンル数: ' + genreConfigs.length);
+  // モード別有効フラグ導入後は genreId 重複除外しない（同ジャンルでも
+  // モードが違えば除外ワードが異なるため別々に収集）
+  Logger.log('処理ジャンル×モード数: ' + genreConfigs.length);
 
   if (index >= genreConfigs.length) {
     Logger.log('語彙プール: 本日分は全ジャンル完了済み（index=' + index + ' / ' + genreConfigs.length + '）');
@@ -128,10 +120,10 @@ function processGenreForWordPool(gc, appId, dateStr, deadline) {
     Utilities.sleep(RAKUTEN_API_DELAY_MS);
   }
 
-  // --- 語彙プールシートに反映（部分でも書き込み） ---
-  updateWordPoolSheet(gc.genreName, wordRecords, dateStr);
+  // --- 語彙プールシートに反映（部分でも書き込み・モード別有効フラグ更新） ---
+  updateWordPoolSheet(gc.genreName, wordRecords, dateStr, gc.mode);
 
-  Logger.log('[' + gc.genreName + '] 語彙プール完了: ' + Object.keys(wordRecords).length + 'レコード');
+  Logger.log('[' + gc.genreName + ':' + gc.mode + '] 語彙プール完了: ' + Object.keys(wordRecords).length + 'レコード');
 }
 
 /**
@@ -339,24 +331,30 @@ function fetchTagInfo(appId, tagId) {
 }
 
 /**
- * 語彙プールシートに反映
- * 既存行（同ジャンル+ワード+由来）があれば最終更新日とヒット数更新、なければ追加
+ * 語彙プールシート(v3)に反映
+ * 既存行（同ジャンル+ワード+由来）があれば:
+ *   - 該当モードの有効列を TRUE に
+ *   - 最終更新日・ヒット数を更新
+ * なければ新規行追加（該当モード列のみTRUE、他モード列はFALSE）
+ * 列: A=ジャンル B=ワード C=由来 D=分類 E=中国輸入有効 F=国内会社有効 G=初出日 H=最終更新日 I=ヒット数
  */
-function updateWordPoolSheet(genreName, wordRecords, dateStr) {
+function updateWordPoolSheet(genreName, wordRecords, dateStr, mode) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var ws = ss.getSheetByName(SHEET_NAMES.WORD_POOL);
   if (!ws) ws = initWordPoolSheet(ss);
 
+  var modeColIdx = (mode === MODES.DOMESTIC) ? 5 : 4;  // 0-index: E=4, F=5
+
   // 既存ジャンル内のレコードを読み込み
   var existing = {};
   if (ws.getLastRow() >= 2) {
-    var data = ws.getRange(2, 1, ws.getLastRow() - 1, 7).getValues();
+    var data = ws.getRange(2, 1, ws.getLastRow() - 1, 9).getValues();
     for (var i = 0; i < data.length; i++) {
       var g = String(data[i][0] || '').trim();
       var w = String(data[i][1] || '').trim();
       var s = String(data[i][2] || '').trim();
       if (g === genreName && w && s) {
-        existing[w + '||' + s] = i + 2;  // 絶対行番号
+        existing[w + '||' + s] = i + 2;
       }
     }
   }
@@ -369,39 +367,50 @@ function updateWordPoolSheet(genreName, wordRecords, dateStr) {
     if (existing[keys[k]]) {
       updates.push({ row: existing[keys[k]], hitsAdd: rec.hits });
     } else {
-      newRows.push([genreName, rec.word, rec.source, rec.classification || 'main', dateStr, dateStr, rec.hits]);
+      // 新規行: 該当モード列のみTRUE
+      var isChina = (mode !== MODES.DOMESTIC);
+      newRows.push([
+        genreName, rec.word, rec.source, rec.classification || 'main',
+        isChina, !isChina, dateStr, dateStr, rec.hits
+      ]);
     }
   }
 
   if (newRows.length > 0) {
-    ws.getRange(ws.getLastRow() + 1, 1, newRows.length, 7).setValues(newRows);
+    var startRow = ws.getLastRow() + 1;
+    ws.getRange(startRow, 1, newRows.length, 9).setValues(newRows);
+    ws.getRange(startRow, 5, newRows.length, 2).insertCheckboxes();
   }
   for (var u = 0; u < updates.length; u++) {
     var row = updates[u].row;
-    var curHits = Number(ws.getRange(row, 7).getValue() || 0);
-    ws.getRange(row, 6).setValue(dateStr);       // 最終更新日
-    ws.getRange(row, 7).setValue(curHits + updates[u].hitsAdd);  // ヒット数累積
+    ws.getRange(row, modeColIdx + 1).setValue(true);  // 該当モード列 TRUE
+    var curHits = Number(ws.getRange(row, 9).getValue() || 0);
+    ws.getRange(row, 8).setValue(dateStr);            // 最終更新日
+    ws.getRange(row, 9).setValue(curHits + updates[u].hitsAdd);
   }
 }
 
 /**
- * 語彙プール読み込み（ジャンル別ワード→分類map）
- * 同じ (genre, word) に複数の由来で登録されていても、1つでも main があれば main が優先
+ * 語彙プール読み込み（モード別・ジャンル別ワード→分類map）
+ * 該当モードの有効フラグ=TRUEの行のみ返す
+ * @param {string} mode - 指定モード (省略時は両モード統合)
  * @return {Object} { genreName: { word: 'main'|'sub' } }
  */
-function loadWordPoolByGenre() {
+function loadWordPoolByGenre(mode) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var ws = ss.getSheetByName(SHEET_NAMES.WORD_POOL);
   if (!ws || ws.getLastRow() < 2) return {};
-  var data = ws.getRange(2, 1, ws.getLastRow() - 1, 4).getValues();
+  var data = ws.getRange(2, 1, ws.getLastRow() - 1, 6).getValues();
+  var modeColIdx = (mode === MODES.DOMESTIC) ? 5 : 4;
   var pool = {};
   for (var i = 0; i < data.length; i++) {
     var genre = String(data[i][0] || '').trim();
     var word  = String(data[i][1] || '').trim();
     var cls   = String(data[i][3] || 'main').trim();
     if (!genre || !word) continue;
+    // モード指定があれば該当列TRUEのみ
+    if (mode && data[i][modeColIdx] !== true) continue;
     if (!pool[genre]) pool[genre] = {};
-    // main が一度でも出たら main 優先（sub は上書きしない）
     if (pool[genre][word] !== 'main') pool[genre][word] = cls;
   }
   return pool;
