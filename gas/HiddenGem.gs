@@ -1,15 +1,11 @@
-// HiddenGem.gs - お宝分析（ランキング × 語彙プール 突合 + AI分析 + 書き出し）
+// HiddenGem.gs - Step 4-7: 商品単位ランキング × 語彙プール突合 → サブワード集計 → お宝分析
 
 /**
  * お宝分析メイン処理
- * 1. 当日のランキング（データ_中国輸入/国内メーカー）からワード取得
- * 2. 消耗品ワード除外
- * 3. 語彙プールと突合して区分判定（メインワード / お宝候補）
- * 4. Claude API でメイン+サブワード判定
- * 5. 調査済み（永久非表示）除外 + グレーアウト情報付与
- * 6. 出現回数desc・同数ならお宝優先でジャンル内ソート、上位50件
- * 7. NEW判定（過去14日以内の初出）
- * 8. お宝分析シート（蓄積式）に書き出し
+ * Step 4: 商品毎にキーワード抽出 → 語彙プール突合
+ * Step 5: メインワード判定（pool main分類に該当する語、複数ならpool hits最大を採用）
+ * Step 6: お宝候補（pool未登録）はAIでメインワード推定
+ * Step 7: サブワード集計（同一メインワード群での共起頻度上位）
  */
 function runHiddenGemAnalysis() {
   var startTime = new Date();
@@ -19,15 +15,16 @@ function runHiddenGemAnalysis() {
 
   var config = getConfig();
   var disposables = loadDisposableWords();
-  var wordPool    = loadWordPoolByGenre();
+  var wordPool    = loadWordPoolByGenre();   // {genre: {word: 'main'|'sub'}}
+  var poolHits    = loadWordPoolHitsByGenre();// {genre: {word: totalHits}}
   var surveyed    = loadSurveyedWords();
 
-  Logger.log('消耗品ワード ' + Object.keys(disposables).length
+  Logger.log('消耗品 ' + Object.keys(disposables).length
              + ' / 語彙プール ' + Object.keys(wordPool).length + 'ジャンル'
              + ' / 調査済み ' + Object.keys(surveyed).length);
 
   var genreConfigs = readGenreConfigs();
-  // ジャンルID重複を除外（中国輸入/国内メーカー両モード登録されてても処理は1回）
+  // ジャンルID重複を除外
   var seen = {};
   var uniqueConfigs = [];
   for (var u = 0; u < genreConfigs.length; u++) {
@@ -36,107 +33,44 @@ function runHiddenGemAnalysis() {
   }
   genreConfigs = uniqueConfigs;
 
-  // 時間切れ前に書き込めるよう deadline を持つ
   var deadline = new Date(startTime.getTime() + 5 * 60 * 1000);
   var allRows = [];
 
   for (var gi = 0; gi < genreConfigs.length; gi++) {
     if (new Date() >= deadline) {
-      Logger.log('時間切れ。未処理ジャンル ' + (genreConfigs.length - gi) + ' は次回実行に回します');
+      Logger.log('時間切れ。未処理ジャンル ' + (genreConfigs.length - gi) + ' は次回');
       break;
     }
     var gc = genreConfigs[gi];
-    var rankWords = getRankingWordsForGenre(gc.genreName, gc.mode, dateStr);
-    if (rankWords.length === 0) {
-      Logger.log('[' + gc.genreName + '] 当日ランキングワードなし');
+    var products = readRankingProducts(gc.mode, gc.genreName, dateStr);
+    if (products.length === 0) {
+      Logger.log('[' + gc.genreName + '] ランキング生データなし');
       continue;
     }
 
-    // 同一商品セットのワードをグループ化（Phase1.2 非適用データへの保険）
-    rankWords = dedupeByProductFingerprint(rankWords);
-    Logger.log('[' + gc.genreName + '] グループ化後: ' + rankWords.length);
-
-    // 消耗品ワード除外（メインワードが消耗品なら落とす）
-    rankWords = rankWords.filter(function(w) { return !disposables[w.word]; });
-
-    // プール判定
-    var genrePool = wordPool[gc.genreName] || {};
-    var classified = rankWords.map(function(w) {
-      return {
-        word           : w.word,
-        subWords       : w.synonyms || [],
-        count          : w.count,
-        products       : w.products || [],
-        classification : w.classification,
-        isMainWord     : !!genrePool[w.word],
-      };
-    });
-
-    // 調査済み「永久非表示」除外（AI分析の前に絞る）
-    classified = classified.filter(function(x) {
-      var entry = surveyed[gc.genreName + '::' + x.word];
-      if (entry && entry.status === '永久非表示') return false;
-      return true;
-    });
-
-    // 順位決め: 出現回数desc / 同数ならお宝優先（AI分析の前にソート+上限で絞る）
-    classified.sort(function(a, b) {
-      if (b.count !== a.count) return b.count - a.count;
-      if (!a.isMainWord && b.isMainWord) return -1;
-      if (a.isMainWord && !b.isMainWord) return 1;
-      return 0;
-    });
-
-    var top = classified.slice(0, HIDDEN_GEM_MAX_PER_GENRE);
-
-    // AI分析（Gemini）は絞った top50 だけに対して実行（トークン節約・速度改善）
-    if (config.geminiApiKey) {
-      top = analyzeWithGemini(config.geminiApiKey, gc.genreName, top);
-    } else {
-      Logger.log('GEMINI_API_KEY 未設定。AI分析スキップ（ワードそのまま使用）');
-    }
-
-    // 各エントリに表示用属性を付与
-    for (var t = 0; t < top.length; t++) {
-      var x = top[t];
-      x.genre = gc.genreName;
-      x.evaluation = getClassificationLabel(x.classification);
-      x.type = x.isMainWord ? 'メインワード' : 'お宝候補';
-
-      // 背景色（調査済みステータス）
-      var surv = surveyed[gc.genreName + '::' + x.word];
-      if (surv && surv.status === '毎年X月再表示') {
-        x.backgroundColor = (surv.month === currentMonth)
-          ? HIDDEN_GEM_COLOR_RECALL
-          : HIDDEN_GEM_COLOR_SURVEYED;
-      } else {
-        x.backgroundColor = null;
-      }
-      allRows.push(x);
-    }
+    var rows = analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, config, currentMonth);
+    allRows = allRows.concat(rows);
+    Logger.log('[' + gc.genreName + '] 出力 ' + rows.length + '行');
   }
 
   if (allRows.length === 0) {
-    Logger.log('お宝分析: 書き込み対象なし');
+    Logger.log('書き込み対象なし');
     return;
   }
 
-  // NEW判定（過去14日以内に同ジャンル+メインワードが既に存在するか）
-  var pastHiddenGem = loadHiddenGemHistory(HIDDEN_GEM_NEW_DAYS);
+  // NEW判定（過去14日間のお宝分析履歴と照合）
+  var past = loadHiddenGemHistory(HIDDEN_GEM_NEW_DAYS);
   for (var r = 0; r < allRows.length; r++) {
     var key = allRows[r].genre + '::' + allRows[r].word;
-    var past = pastHiddenGem[key];
-    if (!past) {
+    var p = past[key];
+    if (!p) {
       allRows[r].newStatus = 'NEW!';
     } else {
-      // サブワード集合に1つでも新規があれば 🔄更新
-      var newSub = false;
-      var pastSubSet = {};
-      for (var p = 0; p < (past.subWords || []).length; p++) pastSubSet[past.subWords[p]] = true;
-      for (var s = 0; s < (allRows[r].subWords || []).length; s++) {
-        if (!pastSubSet[allRows[r].subWords[s]]) { newSub = true; break; }
-      }
-      allRows[r].newStatus = newSub ? '🔄更新' : '既存';
+      var pSet = {};
+      (p.subWords || []).forEach(function(s){ pSet[s] = true; });
+      var hasNewSub = false;
+      (allRows[r].subWords || []).forEach(function(s){ if (!pSet[s]) hasNewSub = true; });
+      allRows[r].newStatus = hasNewSub ? '🔄更新' : '既存';
     }
   }
 
@@ -145,113 +79,224 @@ function runHiddenGemAnalysis() {
   Logger.log('=== お宝分析完了: ' + allRows.length + '行 / ' + elapsed.toFixed(1) + '秒 ===');
 }
 
-function getClassificationLabel(c) {
-  if (c === 'hidden_gem') return SCORE_RULES.HIDDEN_GEM.label;
-  if (c === 'trending')   return SCORE_RULES.TRENDING.label;
-  if (c === 'saturated')  return SCORE_RULES.SATURATED.label;
-  return SCORE_RULES.HIDDEN_GEM.label;  // お宝候補はデフォルトHIDDEN_GEM
-}
-
 /**
- * 商品URLからクエリ文字列（?rafcid=... 等）を除去
+ * 1ジャンルの商品群を分析してお宝分析行を生成
  */
-function stripQueryFromUrl(url) {
-  if (!url) return '';
-  var s = String(url);
-  var idx = s.indexOf('?');
-  return idx >= 0 ? s.substring(0, idx) : s;
-}
+function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, config, currentMonth) {
+  var excludeMap = loadExcludeWords(gc.mode);
+  var synonymMap = loadSynonymMap();
+  var genrePool = wordPool[gc.genreName] || {};
+  var genreHits = poolHits[gc.genreName] || {};
 
-/**
- * 同一商品URLセットを指すワードをグループ化して重複排除
- * 代表: 出現回数desc → 文字数asc、類義ワードに他のメインワードを追加
- * データシートが Phase1.2 適用前（非グループ化）でも HiddenGem 側で吸収する保険
- */
-function dedupeByProductFingerprint(rankWords) {
-  var groups = {};
-  for (var i = 0; i < rankWords.length; i++) {
-    var r = rankWords[i];
-    var urls = (r.products || []).map(function(p){ return stripQueryFromUrl(p.itemUrl); });
-    urls.sort();
-    var fp = urls.join('|');
-    if (!groups[fp]) groups[fp] = [];
-    groups[fp].push(r);
-  }
-  var merged = [];
-  var keys = Object.keys(groups);
-  for (var k = 0; k < keys.length; k++) {
-    var bucket = groups[keys[k]];
-    bucket.sort(function(a, b) {
-      if (b.count !== a.count) return b.count - a.count;
-      return (a.word || '').length - (b.word || '').length;
-    });
-    var rep = bucket[0];
-    var syns = (rep.synonyms || []).slice();
-    for (var j = 1; j < bucket.length; j++) {
-      if (bucket[j].word && syns.indexOf(bucket[j].word) < 0) syns.push(bucket[j].word);
-      (bucket[j].synonyms || []).forEach(function(s) {
-        if (s && syns.indexOf(s) < 0) syns.push(s);
-      });
+  // 各商品を分析
+  var analyses = [];  // [{product, primaryMain, subs, unknowns, allWords}]
+  for (var i = 0; i < products.length; i++) {
+    var p = products[i];
+    var kws = extractKeywords(p.itemName, excludeMap, synonymMap);
+
+    var mains = [];
+    var subs = [];
+    var unknowns = [];
+    for (var k = 0; k < kws.length; k++) {
+      var w = kws[k];
+      if (disposables[w]) continue;  // 消耗品ワードは落とす
+      var cls = genrePool[w];
+      if (cls === 'main') mains.push(w);
+      else if (cls === 'sub') subs.push(w);
+      else unknowns.push(w);
     }
-    rep.synonyms = syns;
-    merged.push(rep);
+
+    // メインワード採用: pool hits が多い順、無ければnull（お宝候補）
+    var primaryMain = null;
+    if (mains.length > 0) {
+      mains.sort(function(a, b) { return (genreHits[b] || 0) - (genreHits[a] || 0); });
+      primaryMain = mains[0];
+    }
+
+    analyses.push({
+      product     : p,
+      primaryMain : primaryMain,
+      otherMains  : mains.slice(1),  // サブワード扱いで回収
+      subs        : subs,
+      unknowns    : unknowns,
+    });
   }
-  return merged;
+
+  // お宝候補（primaryMain 未決）だけ AI に送ってメインワード推定
+  var treasures = [];
+  for (var t = 0; t < analyses.length; t++) {
+    if (!analyses[t].primaryMain) treasures.push(analyses[t]);
+  }
+  if (config.geminiApiKey && treasures.length > 0) {
+    assignAiMainWords(treasures, config.geminiApiKey, gc.genreName);
+  }
+
+  // グループ集計（メインワードごと）
+  var groups = {};  // mainWord → {products:[], subFreq:{}, isTreasure:bool}
+  for (var a = 0; a < analyses.length; a++) {
+    var ana = analyses[a];
+    var main = ana.primaryMain || ana.aiMain || '';
+    if (!main) continue;  // AI失敗したもの（元ワード不明）は出力しない
+    if (!groups[main]) {
+      groups[main] = { products: [], subFreq: {}, isTreasure: !ana.primaryMain };
+    }
+    groups[main].products.push(ana.product);
+    // サブワード候補を集計（pool sub + otherMains + unknowns もサブ候補として）
+    var subCandidates = ana.subs.concat(ana.otherMains);
+    for (var s = 0; s < subCandidates.length; s++) {
+      var sw = subCandidates[s];
+      if (sw === main) continue;
+      groups[main].subFreq[sw] = (groups[main].subFreq[sw] || 0) + 1;
+    }
+    // unknowns も少しだけ混ぜる（pool未登録だが共起）
+    for (var su = 0; su < ana.unknowns.length; su++) {
+      var usw = ana.unknowns[su];
+      if (usw === main) continue;
+      groups[main].subFreq[usw] = (groups[main].subFreq[usw] || 0) + 0.5;  // unknownは半分の重み
+    }
+  }
+
+  // グループを行オブジェクトに変換
+  var rows = [];
+  var mainWords = Object.keys(groups);
+  for (var m = 0; m < mainWords.length; m++) {
+    var mw = mainWords[m];
+    var g = groups[mw];
+    // 調査済み永久非表示は除外
+    var surv = surveyed[gc.genreName + '::' + mw];
+    if (surv && surv.status === '永久非表示') continue;
+
+    // サブワードTop10（出現回数desc）
+    var subs = Object.keys(g.subFreq)
+      .sort(function(a, b) { return g.subFreq[b] - g.subFreq[a]; })
+      .slice(0, 10);
+
+    // 背景色
+    var bg = null;
+    if (surv && surv.status === '毎年X月再表示') {
+      bg = (surv.month === currentMonth) ? HIDDEN_GEM_COLOR_RECALL : HIDDEN_GEM_COLOR_SURVEYED;
+    }
+
+    // 上位商品URL（rank昇順）
+    var topProducts = g.products.slice().sort(function(a, b) { return a.rank - b.rank; });
+
+    rows.push({
+      genre       : gc.genreName,
+      word        : mw,
+      subWords    : subs,
+      count       : g.products.length,
+      type        : g.isTreasure ? 'お宝候補' : 'メインワード',
+      evaluation  : SCORE_RULES.HIDDEN_GEM.label,
+      products    : topProducts.slice(0, HIDDEN_GEM_URL_COUNT),
+      backgroundColor: bg,
+    });
+  }
+
+  // ソート: 出現回数desc、同数ならお宝優先
+  rows.sort(function(a, b) {
+    if (b.count !== a.count) return b.count - a.count;
+    if (a.type === 'お宝候補' && b.type !== 'お宝候補') return -1;
+    if (b.type === 'お宝候補' && a.type !== 'お宝候補') return 1;
+    return 0;
+  });
+  return rows.slice(0, HIDDEN_GEM_MAX_PER_GENRE);
 }
 
 /**
- * 当日の指定ジャンル・モードのデータシートからワード一覧を取得
- * 同ジャンルの全行をもらい、代表キーワード単位でまとめる
+ * お宝候補（メインワード未決）の商品タイトルをGeminiに渡してメインワード推定
+ * 推定結果は treasures[i].aiMain にセット
  */
-function getRankingWordsForGenre(genreName, mode, dateStr) {
+function assignAiMainWords(treasures, apiKey, genreName) {
+  if (treasures.length === 0) return;
+  for (var start = 0; start < treasures.length; start += GEMINI_BATCH_SIZE) {
+    var end = Math.min(start + GEMINI_BATCH_SIZE, treasures.length);
+    var batch = [];
+    for (var i = start; i < end; i++) {
+      batch.push({ id: i, title: treasures[i].product.itemName });
+    }
+    aiBatchMainWord(apiKey, genreName, treasures, batch);
+  }
+}
+
+function aiBatchMainWord(apiKey, genreName, treasures, batch) {
+  var prompt = [
+    '楽天ランキング「' + genreName + '」の商品タイトル群から、各商品のメインワード（商品カテゴリ名）を1つずつ抽出してください。',
+    '',
+    '- メインワードは商品カテゴリ・商品名を表す1〜5文字程度の日本語',
+    '- ブランド名や型番は避け、汎用的な商品カテゴリ名に',
+    '- タイトルから明確な商品カテゴリが読み取れない場合は空文字',
+    '',
+    '出力はJSON配列のみ（説明文なし）:',
+    '[{"id":0,"mainWord":"..."}, ...]',
+    '',
+    '入力:',
+    JSON.stringify(batch)
+  ].join('\n');
+
+  var url = GEMINI_API_URL_BASE + GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(apiKey);
+  var payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature      : 0.3,
+      maxOutputTokens  : GEMINI_MAX_TOKENS,
+      responseMimeType : 'application/json',
+      thinkingConfig   : { thinkingBudget: 0 },
+    }
+  };
+
+  try {
+    var response = UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json',
+      payload: JSON.stringify(payload), muteHttpExceptions: true,
+    });
+    if (response.getResponseCode() !== 200) {
+      Logger.log('Gemini error ' + response.getResponseCode() + ': ' + response.getContentText().substring(0, 300));
+      return;
+    }
+    var body = JSON.parse(response.getContentText());
+    var cand = body.candidates && body.candidates[0];
+    if (!cand || !cand.content || !cand.content.parts) return;
+    var text = cand.content.parts.map(function(p){ return p.text || ''; }).join('');
+    var parsed = tryParseJsonArray(text);
+    if (!parsed) {
+      Logger.log('Gemini JSON失敗 [' + genreName + ']: ' + text.substring(0, 200));
+      return;
+    }
+    for (var i = 0; i < parsed.length; i++) {
+      var r = parsed[i];
+      if (typeof r.id !== 'number' || !treasures[r.id]) continue;
+      if (typeof r.mainWord === 'string' && r.mainWord.trim().length > 0) {
+        treasures[r.id].aiMain = r.mainWord.trim();
+      }
+    }
+    Logger.log('[' + genreName + '] AI main判定 ' + parsed.length + '件');
+  } catch(e) {
+    Logger.log('Gemini fetch error: ' + e);
+  }
+}
+
+/**
+ * 語彙プールのジャンル別ヒット数Map
+ */
+function loadWordPoolHitsByGenre() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var ws = ss.getSheetByName(getDataSheetName(mode));
-  if (!ws || ws.getLastRow() < 2) return [];
-  var data = ws.getDataRange().getValues();
-
-  // 列: 日付|ジャンル|代表キーワード|類義ワード|出現回数|平均順位|スコア|分類|新規参入|1位順位|1位URL|...|5位URL
-  var words = [];
-  for (var i = 1; i < data.length; i++) {
-    var row = data[i];
-    if (!row[0]) continue;
-    var rowDate = (row[0] instanceof Date)
-      ? Utilities.formatDate(row[0], 'Asia/Tokyo', 'yyyy-MM-dd')
-      : String(row[0]).substring(0, 10);
-    if (rowDate !== dateStr) continue;
-    if (String(row[1]).trim() !== genreName) continue;
-
-    var products = [];
-    for (var p = 0; p < PRODUCTS_PER_KEYWORD; p++) {
-      var base = 9 + p * 2;  // 1位順位=列10(index9), 1位URL=列11(index10)
-      var rank = row[base];
-      var url  = row[base + 1];
-      if (rank && url) products.push({ rank: rank, itemUrl: url });
-    }
-
-    var synonymsStr = String(row[3] || '').trim();
-    var synonyms = synonymsStr ? synonymsStr.split(/[,，、]/).map(function(s){return s.trim();}).filter(function(s){return s;}) : [];
-
-    words.push({
-      word           : String(row[2] || '').trim(),
-      synonyms       : synonyms,
-      count          : Number(row[4] || 0),
-      classification : mapClassificationLabelToKey(String(row[7] || '')),
-      products       : products,
-    });
+  var ws = ss.getSheetByName(SHEET_NAMES.WORD_POOL);
+  if (!ws || ws.getLastRow() < 2) return {};
+  var data = ws.getRange(2, 1, ws.getLastRow() - 1, 7).getValues();
+  var map = {};
+  for (var i = 0; i < data.length; i++) {
+    var genre = String(data[i][0] || '').trim();
+    var word  = String(data[i][1] || '').trim();
+    var hits  = Number(data[i][6] || 0);
+    if (!genre || !word) continue;
+    if (!map[genre]) map[genre] = {};
+    map[genre][word] = (map[genre][word] || 0) + hits;
   }
-  return words;
-}
-
-function mapClassificationLabelToKey(label) {
-  if (label.indexOf('隠れた') >= 0) return 'hidden_gem';
-  if (label.indexOf('注目')   >= 0) return 'trending';
-  if (label.indexOf('飽和')   >= 0) return 'saturated';
-  return 'hidden_gem';
+  return map;
 }
 
 /**
- * 過去 daysBack 日以内のお宝分析シートから {ジャンル::メインワード → {subWords}} を読む
- * NEW判定・🔄更新判定用
+ * 過去 daysBack 日以内のお宝分析履歴 (ジャンル::メインワード → {subWords})
  */
 function loadHiddenGemHistory(daysBack) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
@@ -277,7 +322,7 @@ function loadHiddenGemHistory(daysBack) {
 }
 
 /**
- * お宝分析シートに行追加（蓄積式・背景色もセット）
+ * お宝分析シートに行追加（蓄積式・背景色セット）
  */
 function writeHiddenGemResults(rows, dateStr) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
@@ -305,7 +350,6 @@ function writeHiddenGemResults(rows, dateStr) {
     }
     values.push(row);
 
-    // 背景色行
     var rowBg = [];
     for (var b = 0; b < totalCols; b++) rowBg.push(r.backgroundColor || null);
     bgColors.push(rowBg);
@@ -314,6 +358,5 @@ function writeHiddenGemResults(rows, dateStr) {
   var startRow = ws.getLastRow() + 1;
   ws.getRange(startRow, 1, values.length, totalCols).setValues(values);
   ws.getRange(startRow, 1, bgColors.length, totalCols).setBackgrounds(bgColors);
-
   Logger.log('お宝分析シートに ' + values.length + '行書き込み');
 }
