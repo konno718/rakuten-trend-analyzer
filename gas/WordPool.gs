@@ -83,11 +83,11 @@ function processGenreForWordPool(gc, appId, dateStr) {
     Utilities.sleep(RAKUTEN_API_DELAY_MS);
   }
 
-  // --- ソース2: ItemRanking 多期間 ---
-  for (var r = 0; r < WORDPOOL_RANKING_PERIODS.length; r++) {
-    var period = WORDPOOL_RANKING_PERIODS[r];
-    var rankItems = fetchItemRankingByGenre(appId, genreId, period);
-    collectWordsFromItems(rankItems, 'ランキング派生(' + period + ')', wordRecords, tagIdSet, excludeMap, synonymMap);
+  // --- ソース2: ItemRanking 最新ランキング（複数ページで60位まで） ---
+  for (var r = 1; r <= WORDPOOL_RANKING_PAGES; r++) {
+    var rankItems = fetchItemRankingByGenre(appId, genreId, r);
+    if (rankItems.length === 0) break;
+    collectWordsFromItems(rankItems, 'ランキング派生(' + r + 'page)', wordRecords, tagIdSet, excludeMap, synonymMap);
     Utilities.sleep(RAKUTEN_API_DELAY_MS);
   }
 
@@ -178,19 +178,21 @@ function fetchItemSearchByGenre(appId, genreId, sort, hits, page) {
 }
 
 /**
- * 楽天 商品ランキングAPI でジャンル・期間別ランキングを取得
- * period: 'realtime' | 'daily' | 'weekly' | 'monthly'
+ * 楽天 商品ランキングAPI でジャンル別の最新ランキングを取得
+ * period パラメータは数値形式(YYYYMMDD)指定のため省略=最新ランキング
+ * page: 1-N (1ページ=30件)
  */
-function fetchItemRankingByGenre(appId, genreId, period) {
+function fetchItemRankingByGenre(appId, genreId, page) {
   var url = RAKUTEN_ITEM_RANKING
     + '?format=json&applicationId=' + appId
     + '&genreId=' + genreId
-    + '&period=' + period
-    + '&hits=30';
+    + '&hits=30'
+    + '&page=' + (page || 1);
   try {
     var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
     if (response.getResponseCode() !== 200) {
-      Logger.log('ItemRanking HTTP ' + response.getResponseCode() + ' genreId=' + genreId + ' period=' + period);
+      Logger.log('ItemRanking HTTP ' + response.getResponseCode() + ' genreId=' + genreId + ' page=' + page
+                 + ' body=' + response.getContentText().substring(0, 200));
       return [];
     }
     var parsed = JSON.parse(response.getContentText());
@@ -204,7 +206,7 @@ function fetchItemRankingByGenre(appId, genreId, period) {
       };
     });
   } catch(e) {
-    Logger.log('ItemRanking error genreId=' + genreId + ' period=' + period + ': ' + e);
+    Logger.log('ItemRanking error genreId=' + genreId + ' page=' + page + ': ' + e);
     return [];
   }
 }
