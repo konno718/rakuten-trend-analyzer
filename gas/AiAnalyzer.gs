@@ -80,8 +80,16 @@ function analyzeGeminiBatch(apiKey, genreName, classified, batch) {
     for (var i = 0; i < parsed.length; i++) {
       var r = parsed[i];
       if (typeof r.id !== 'number' || !classified[r.id]) continue;
-      if (r.mainWord) classified[r.id].word = r.mainWord;
-      if (Array.isArray(r.subWords)) classified[r.id].subWords = r.subWords.slice(0, 10);
+      if (r.mainWord && typeof r.mainWord === 'string' && r.mainWord.trim().length > 0) {
+        classified[r.id].word = r.mainWord.trim();
+      }
+      if (Array.isArray(r.subWords)) {
+        // 文字列のみ・2文字以上・空白trim した値を最大10個
+        classified[r.id].subWords = r.subWords
+          .map(function(x) { return (typeof x === 'string') ? x.trim() : ''; })
+          .filter(function(x) { return x && x.length >= 2; })
+          .slice(0, 10);
+      }
     }
     Logger.log('[' + genreName + '] Gemini batch ' + parsed.length + '/' + batch.length);
   } catch(e) {

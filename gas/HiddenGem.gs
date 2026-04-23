@@ -52,6 +52,10 @@ function runHiddenGemAnalysis() {
       continue;
     }
 
+    // 同一商品セットのワードをグループ化（Phase1.2 非適用データへの保険）
+    rankWords = dedupeByProductFingerprint(rankWords);
+    Logger.log('[' + gc.genreName + '] グループ化後: ' + rankWords.length);
+
     // 消耗品ワード除外（メインワードが消耗品なら落とす）
     rankWords = rankWords.filter(function(w) { return !disposables[w.word]; });
 
@@ -146,6 +150,53 @@ function getClassificationLabel(c) {
   if (c === 'trending')   return SCORE_RULES.TRENDING.label;
   if (c === 'saturated')  return SCORE_RULES.SATURATED.label;
   return SCORE_RULES.HIDDEN_GEM.label;  // お宝候補はデフォルトHIDDEN_GEM
+}
+
+/**
+ * 商品URLからクエリ文字列（?rafcid=... 等）を除去
+ */
+function stripQueryFromUrl(url) {
+  if (!url) return '';
+  var s = String(url);
+  var idx = s.indexOf('?');
+  return idx >= 0 ? s.substring(0, idx) : s;
+}
+
+/**
+ * 同一商品URLセットを指すワードをグループ化して重複排除
+ * 代表: 出現回数desc → 文字数asc、類義ワードに他のメインワードを追加
+ * データシートが Phase1.2 適用前（非グループ化）でも HiddenGem 側で吸収する保険
+ */
+function dedupeByProductFingerprint(rankWords) {
+  var groups = {};
+  for (var i = 0; i < rankWords.length; i++) {
+    var r = rankWords[i];
+    var urls = (r.products || []).map(function(p){ return stripQueryFromUrl(p.itemUrl); });
+    urls.sort();
+    var fp = urls.join('|');
+    if (!groups[fp]) groups[fp] = [];
+    groups[fp].push(r);
+  }
+  var merged = [];
+  var keys = Object.keys(groups);
+  for (var k = 0; k < keys.length; k++) {
+    var bucket = groups[keys[k]];
+    bucket.sort(function(a, b) {
+      if (b.count !== a.count) return b.count - a.count;
+      return (a.word || '').length - (b.word || '').length;
+    });
+    var rep = bucket[0];
+    var syns = (rep.synonyms || []).slice();
+    for (var j = 1; j < bucket.length; j++) {
+      if (bucket[j].word && syns.indexOf(bucket[j].word) < 0) syns.push(bucket[j].word);
+      (bucket[j].synonyms || []).forEach(function(s) {
+        if (s && syns.indexOf(s) < 0) syns.push(s);
+      });
+    }
+    rep.synonyms = syns;
+    merged.push(rep);
+  }
+  return merged;
 }
 
 /**
@@ -250,7 +301,7 @@ function writeHiddenGemResults(rows, dateStr) {
       r.newStatus || '既存',
     ];
     for (var p = 0; p < HIDDEN_GEM_URL_COUNT; p++) {
-      row.push(r.products && r.products[p] ? r.products[p].itemUrl : '');
+      row.push(r.products && r.products[p] ? stripQueryFromUrl(r.products[p].itemUrl) : '');
     }
     values.push(row);
 
