@@ -41,11 +41,10 @@ function runDailyCollection() {
       var items = fetchRakutenRanking(config.rakutenAppId, genreId, RANKING_TOP_N);
       if (items.length === 0) continue;
 
-      // 商品名整形 + モード別除外
+      // Step 2: 商品名整形のみ、商品レベル除外は HiddenGem で適用
       var filtered = [];
       for (var k = 0; k < items.length; k++) {
         var cleaned = cleanTitlePrefix(items[k].itemName || '');
-        if (isProductExcluded(cleaned, gc.mode)) continue;
         filtered.push({
           rank     : items[k].rank,
           itemName : cleaned,

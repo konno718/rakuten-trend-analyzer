@@ -76,8 +76,10 @@ function processGenreForWordPool(gc, appId, dateStr, deadline) {
 
   Logger.log('[' + gc.genreName + '] 語彙プール更新開始');
 
-  var excludeMap = loadExcludeWords(gc.mode);
-  var synonymMap = loadSynonymMap();
+  // Step 2: 語彙プール構築時はフィルタせず全トークン登録
+  // 除外・装飾語・消耗品・同義語は推奨ワード分析時に適用
+  var excludeMap = {};
+  var synonymMap = {};
   var wordRecords = {};
   var tagIdSet = {};
   var timeExceeded = function() { return deadline && new Date() >= deadline; };

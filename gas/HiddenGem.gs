@@ -162,9 +162,16 @@ function runHiddenGemAnalysis() {
 function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, config, currentMonth, keywordGenreAccum) {
   var excludeMap    = loadExcludeWords(gc.mode);
   var decorativeMap = loadDecorativeWords(gc.mode);
-  var synonymMap    = loadSynonymMap();
+  var synonymMap    = {};  // Step 2: 同義語は一旦使わない
   var genrePool = wordPool[gc.genreName] || {};
   var genreHits = poolHits[gc.genreName] || {};
+
+  // Step 2: ランキング生データは全商品保存されているので、ここで商品レベル除外を適用
+  var beforeCount = products.length;
+  products = products.filter(function(p) { return !isProductExcluded(p.itemName, gc.mode); });
+  if (products.length !== beforeCount) {
+    Logger.log('[' + gc.genreName + '] 商品除外: ' + beforeCount + ' → ' + products.length);
+  }
 
   var genreUniqueKws = {};  // ジャンル内でユニーク出現した語（除外候補検出用）
 
