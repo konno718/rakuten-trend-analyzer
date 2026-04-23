@@ -317,86 +317,129 @@ function writeSummary(text, dateStr) {
   ws.appendRow([dateStr, text]);
 }
 
-/**
- * データシートから種ワード候補を読み取る（フェーズ2用）
- * 条件: count >= minCount、最新日付、出現回数 desc でソート、上限 maxSeeds
- * @return {Array<{keyword, count, avgRank, finalScore, genre}>}
- */
-function readSeedsFromData(mode, minCount, maxSeeds) {
-  minCount = minCount || COOC_SEED_MIN_COUNT;
-  maxSeeds = maxSeeds || COOC_MAX_SEEDS;
-  var ss = SpreadsheetApp.openById(SHEET_ID);
-  var ws = ss.getSheetByName(getDataSheetName(mode));
-  if (!ws || ws.getLastRow() < 2) return [];
+// === お宝分析システム関連シート ===
 
+/**
+ * 調査済みワードシート初期化
+ * 列: メインワード, ジャンル, 最終調査日, ステータス, 再表示月(1-12), メモ
+ */
+function initSurveyedSheet(ss) {
+  var ws = getOrCreateSheet(ss, SHEET_NAMES.SURVEYED, [
+    'メインワード', 'ジャンル', '最終調査日', 'ステータス', '再表示月(1-12)', 'メモ'
+  ]);
+  // ステータス列のデータ入力規則
+  var statusRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['永久非表示', '毎年X月再表示'], true)
+    .setAllowInvalid(false).build();
+  ws.getRange(2, 4, Math.max(1, ws.getMaxRows() - 1), 1).setDataValidation(statusRule);
+}
+
+/**
+ * 語彙プールシート初期化
+ * 列: ジャンル, ワード, 由来, 初出日, 最終更新日, ヒット数
+ */
+function initWordPoolSheet(ss) {
+  return getOrCreateSheet(ss, SHEET_NAMES.WORD_POOL, [
+    'ジャンル', 'ワード', '由来', '初出日', '最終更新日', 'ヒット数'
+  ]);
+}
+
+/**
+ * タグ辞書シート初期化（タグID → タググループ名 / タグ名）
+ */
+function initTagDictSheet(ss) {
+  return getOrCreateSheet(ss, SHEET_NAMES.TAG_DICT, [
+    'タグID', 'タググループ名', 'タグ名', '取得日'
+  ]);
+}
+
+/**
+ * お宝分析シート初期化
+ * 列: 日付, 出現回数, 区分, ジャンル, メインワード, サブワード, 評価, 新規参入, URL1..URL6
+ */
+function initHiddenGemSheet(ss) {
+  var headers = ['日付', '出現回数', '区分', 'ジャンル', 'メインワード', 'サブワード', '評価', '新規参入'];
+  for (var u = 1; u <= HIDDEN_GEM_URL_COUNT; u++) headers.push('URL' + u);
+  return getOrCreateSheet(ss, SHEET_NAMES.HIDDEN_GEM, headers);
+}
+
+/**
+ * 消耗品ワード初期登録（除外ワードシートに 種類=消耗品 で追加）
+ * 既に登録済みのワードはスキップ
+ */
+function seedDisposableWords() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  initExcludeWordsSheet(ss);
+  var ws = ss.getSheetByName(SHEET_NAMES.EXCLUDES);
+  var disposables = [
+    '詰め替え', '詰替', 'リフィル', 'refill',
+    '替え', '替刃', '替芯', '替えブラシ', '替えパッド', '替えヘッド',
+    '交換用', '補充用', '使い捨て', '消耗',
+    'カートリッジ', 'スペア', '予備',
+    'ストック', 'パック',
+    '使い切り'
+  ];
   var data = ws.getDataRange().getValues();
-  // 列: 日付|ジャンル|代表キーワード|類義ワード|出現回数|平均順位|スコア|分類|新規参入|...
-  // 最新日付を特定
-  var latestDate = null;
+  var existing = {};
   for (var i = 1; i < data.length; i++) {
-    var d = data[i][0];
-    if (!d) continue;
-    var t = (d instanceof Date) ? d.getTime() : new Date(d).getTime();
-    if (!latestDate || t > latestDate) latestDate = t;
+    var w = String(data[i][2] || '').trim();
+    if (w) existing[w] = true;
   }
-  if (!latestDate) return [];
-
-  var seeds = [];
-  for (var j = 1; j < data.length; j++) {
-    var row = data[j];
-    if (!row[0]) continue;
-    var rowTime = (row[0] instanceof Date) ? row[0].getTime() : new Date(row[0]).getTime();
-    if (rowTime !== latestDate) continue;
-    var count = Number(row[4] || 0);
-    if (count < minCount) continue;
-    seeds.push({
-      genre      : String(row[1] || ''),
-      keyword    : String(row[2] || ''),
-      count      : count,
-      avgRank    : Number(row[5] || 0),
-      finalScore : Number(row[6] || 0),
-    });
+  var newRows = [];
+  for (var j = 0; j < disposables.length; j++) {
+    if (!existing[disposables[j]]) {
+      newRows.push([true, true, disposables[j], '消耗品', '']);
+    }
   }
-  // 出現回数 desc → スコア desc
-  seeds.sort(function(a, b) {
-    if (b.count !== a.count) return b.count - a.count;
-    return b.finalScore - a.finalScore;
-  });
-  return seeds.slice(0, maxSeeds);
+  if (newRows.length > 0) {
+    var startRow = ws.getLastRow() + 1;
+    ws.getRange(startRow, 1, newRows.length, 5).setValues(newRows);
+    ws.getRange(startRow, 1, newRows.length, 2).insertCheckboxes();
+    Logger.log('消耗品ワード ' + newRows.length + '件追加');
+  } else {
+    Logger.log('消耗品ワードは既に登録済み');
+  }
 }
 
 /**
- * 共起ワードシート（フェーズ2）の取得・初期化
+ * 除外ワードシートから 種類=消耗品 のワードだけを返す
  */
-function getOrCreateCooccurrenceSheet(ss, sheetName) {
-  var headers = ['日付', 'ジャンル', '主ワード', '修飾語', 'サジェスト検出', '商品数(楽天市場)', '種ワード最上位ランク', '合算スコア', 'メモ'];
-  return getOrCreateSheet(ss, sheetName, headers);
-}
-
-/**
- * 共起ワードシートに書き込む
- */
-function writeCooccurrence(results, dateStr, mode) {
-  if (!results || results.length === 0) return;
+function loadDisposableWords() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var ws = getOrCreateCooccurrenceSheet(ss, getCooccurrenceSheetName(mode));
-  var rows = [];
-  for (var i = 0; i < results.length; i++) {
-    var r = results[i];
-    rows.push([
-      dateStr,
-      r.genre || '',
-      r.mainWord,
-      r.modifier,
-      r.suggestFound ? '○' : '',
-      r.itemCount || 0,
-      r.topRank || '',
-      r.score || 0,
-      r.memo || '',
-    ]);
+  var ws = ss.getSheetByName(SHEET_NAMES.EXCLUDES);
+  if (!ws) return {};
+  var data = ws.getDataRange().getValues();
+  var map = {};
+  for (var i = 1; i < data.length; i++) {
+    var word = String(data[i][2] || '').trim();
+    var type = String(data[i][3] || '').trim();
+    if (word && type === '消耗品') map[word] = true;
   }
-  ws.getRange(ws.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
-  Logger.log('[' + mode + '] 共起ワード書き込み ' + rows.length + '行');
+  return map;
+}
+
+/**
+ * 調査済みワードシートを読み、ジャンル+メインワード をキーにステータスMap返す
+ * @return {Object} { "ジャンル::メインワード": {lastDate, status, month, memo} }
+ */
+function loadSurveyedWords() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ws = ss.getSheetByName(SHEET_NAMES.SURVEYED);
+  if (!ws || ws.getLastRow() < 2) return {};
+  var data = ws.getDataRange().getValues();
+  var map = {};
+  for (var i = 1; i < data.length; i++) {
+    var word  = String(data[i][0] || '').trim();
+    var genre = String(data[i][1] || '').trim();
+    if (!word || !genre) continue;
+    map[genre + '::' + word] = {
+      lastDate : data[i][2],
+      status   : String(data[i][3] || '').trim(),
+      month    : Number(data[i][4] || 0),
+      memo     : String(data[i][5] || ''),
+    };
+  }
+  return map;
 }
 
 /**

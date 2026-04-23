@@ -1,4 +1,4 @@
-// Config.gs - 設定・APIキー管理
+// Config.gs - 設定・APIキー管理・定数
 
 const SHEET_ID = '1zqXH-cssTIf976gLhVs5QO2p3W0FfB_74x6nKn1K_uU';
 
@@ -14,8 +14,10 @@ const SHEET_NAMES = {
   EXCLUDES      : '除外ワード',
   CANDIDATES    : '除外候補',
   SYNONYMS      : '同義語',
-  COOC_CHINA    : '共起ワード_中国輸入',
-  COOC_DOMESTIC : '共起ワード_国内メーカー',
+  WORD_POOL     : '語彙プール',
+  TAG_DICT      : 'タグ辞書',
+  SURVEYED      : '調査済みワード',
+  HIDDEN_GEM    : 'お宝分析',
   SUMMARY       : 'サマリー',
 };
 
@@ -26,27 +28,40 @@ const SCORE_RULES = {
 };
 
 const RANKING_TOP_N = 300;
-const PRODUCTS_PER_KEYWORD = 5;  // データシートに横展開する上位商品数
+const PRODUCTS_PER_KEYWORD = 5;
 
-// === フェーズ2: 共起分析 定数 ===
-const COOC_SEED_MIN_COUNT = 5;    // 種ワードの最小出現回数
-const COOC_MAX_SEEDS      = 30;   // 1モード当たり処理する種ワード最大数（GAS 6分制限対策）
-const SUGGEST_DELAY_MS    = 500;  // サジェスト間隔
-const SEARCH_API_DELAY_MS = 1100; // 商品検索API間隔（1 req/sec）
-const SUGGEST_URL         = 'https://search.rakuten.co.jp/suggest?q=';
-const SEARCH_API_URL      = 'https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706';
+// === 楽天API エンドポイント ===
+const RAKUTEN_API_BASE     = 'https://app.rakuten.co.jp/services/api';
+const RAKUTEN_ITEM_SEARCH  = RAKUTEN_API_BASE + '/IchibaItem/Search/20220601';
+const RAKUTEN_ITEM_RANKING = RAKUTEN_API_BASE + '/IchibaItem/Ranking/20220601';
+const RAKUTEN_GENRE_SEARCH = RAKUTEN_API_BASE + '/IchibaGenre/Search/20140222';
+const RAKUTEN_TAG_SEARCH   = RAKUTEN_API_BASE + '/IchibaTag/Search/20140222';
+const RAKUTEN_API_DELAY_MS = 1100;  // 1 req/sec 安全マージン
+
+// === 語彙プール構築 ===
+const WORDPOOL_STEP_TIME_LIMIT_MS = 5 * 60 * 1000;  // 5分で中断→次回継続
+const WORDPOOL_ITEM_PAGES          = 2;              // ItemSearch取得ページ数 (30件×2=60商品)
+const WORDPOOL_RANKING_PERIODS     = ['daily', 'weekly', 'monthly'];
+
+// === お宝分析 ===
+const HIDDEN_GEM_MAX_PER_GENRE = 50;        // ジャンル毎の出力上限
+const HIDDEN_GEM_NEW_DAYS      = 14;        // 初出から何日間 NEW! 表示継続
+const HIDDEN_GEM_URL_COUNT     = 6;         // URL列数 (URL1〜URL6)
+const HIDDEN_GEM_COLOR_SURVEYED = '#F0F0F0'; // 調査済み・非該当月
+const HIDDEN_GEM_COLOR_RECALL   = '#E8F0FE'; // 調査済み・再表示月
+
+// === Claude API ===
+const CLAUDE_API_URL     = 'https://api.anthropic.com/v1/messages';
+const CLAUDE_MODEL       = 'claude-sonnet-4-6';
+const CLAUDE_MAX_TOKENS  = 4000;
+const CLAUDE_API_VERSION = '2023-06-01';
+
+// === チェックポイント用ScriptPropertiesキー ===
+const WP_CHECKPOINT_DATE_KEY  = 'WP_CHECKPOINT_DATE';
+const WP_CHECKPOINT_INDEX_KEY = 'WP_CHECKPOINT_INDEX';
 
 function getDataSheetName(mode) {
   return mode === MODES.DOMESTIC ? SHEET_NAMES.DATA_DOMESTIC : SHEET_NAMES.DATA_CHINA;
-}
-
-function getCooccurrenceSheetName(mode) {
-  return mode === MODES.DOMESTIC ? SHEET_NAMES.COOC_DOMESTIC : SHEET_NAMES.COOC_CHINA;
-}
-
-// 除外ワード/除外候補シートの「有効」列 (1-based)
-function getExcludeColumnForMode(mode) {
-  return mode === MODES.DOMESTIC ? 2 : 1;  // A=中国輸入, B=国内会社
 }
 
 function getConfig() {
