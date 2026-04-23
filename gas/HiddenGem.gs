@@ -195,39 +195,28 @@ function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, c
 }
 
 /**
- * サブワードTop N を4段階優先ルールで選定
- * 優先順位:
- *   1. 語彙プール sub分類 × 複数回出現
- *   2. 語彙プール sub分類 × 1回のみ
- *   3. 語彙プール外          × 複数回出現
- *   4. 語彙プール外          × 1回のみ
- * 各段階内では出現回数desc順
+ * サブワードTop N を出現頻度優先で選定
+ *   - 基準: 出現頻度 ≥ 2 のみ採用（1回のみは関連性低いので捨てる）
+ *   - ソート: 頻度desc → 同値なら 語彙プール sub を優先
  */
 function pickTopSubWords(subFreq, genrePool, maxN) {
-  var poolSubMulti = [];
-  var poolSubOne   = [];
-  var otherMulti   = [];
-  var otherOne     = [];
+  var candidates = [];
   var words = Object.keys(subFreq);
   for (var i = 0; i < words.length; i++) {
     var w = words[i];
     var f = subFreq[w];
-    var isPoolSub = (genrePool[w] === 'sub');
-    if (isPoolSub && f >= 2) poolSubMulti.push({word: w, freq: f});
-    else if (isPoolSub)       poolSubOne.push({word: w, freq: f});
-    else if (f >= 2)          otherMulti.push({word: w, freq: f});
-    else                      otherOne.push({word: w, freq: f});
+    if (f < 2) continue;  // 複数回出現のみ
+    candidates.push({
+      word      : w,
+      freq      : f,
+      isPoolSub : genrePool[w] === 'sub',
+    });
   }
-  var byFreqDesc = function(a, b) { return b.freq - a.freq; };
-  poolSubMulti.sort(byFreqDesc);
-  poolSubOne.sort(byFreqDesc);
-  otherMulti.sort(byFreqDesc);
-  otherOne.sort(byFreqDesc);
-  var out = [];
-  [poolSubMulti, poolSubOne, otherMulti, otherOne].forEach(function(g) {
-    for (var j = 0; j < g.length && out.length < maxN; j++) out.push(g[j].word);
+  candidates.sort(function(a, b) {
+    if (b.freq !== a.freq) return b.freq - a.freq;                        // 頻度desc
+    return (b.isPoolSub ? 1 : 0) - (a.isPoolSub ? 1 : 0);                 // 同頻度なら pool sub 優先
   });
-  return out;
+  return candidates.slice(0, maxN).map(function(c) { return c.word; });
 }
 
 /**
