@@ -147,8 +147,9 @@ function runHiddenGemAnalysis() {
  * （除外候補の横断検出用）
  */
 function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, config, currentMonth, keywordGenreAccum) {
-  var excludeMap = loadExcludeWords(gc.mode);
-  var synonymMap = loadSynonymMap();
+  var excludeMap    = loadExcludeWords(gc.mode);
+  var decorativeMap = loadDecorativeWords(gc.mode);
+  var synonymMap    = loadSynonymMap();
   var genrePool = wordPool[gc.genreName] || {};
   var genreHits = poolHits[gc.genreName] || {};
 
@@ -166,7 +167,12 @@ function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, c
     for (var k = 0; k < kws.length; k++) {
       var w = kws[k];
       if (disposables[w]) continue;  // 消耗品ワードは落とす
-      genreUniqueKws[w] = true;       // ジャンル内ユニークで集計
+      genreUniqueKws[w] = true;
+      // 装飾語はメイン候補にせず、強制サブ扱い
+      if (decorativeMap[w]) {
+        subs.push(w);
+        continue;
+      }
       var cls = genrePool[w];
       if (cls === 'main') mains.push(w);
       else if (cls === 'sub') subs.push(w);

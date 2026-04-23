@@ -74,21 +74,46 @@ function loadSynonymMap() {
 /**
  * 除外ワードシートからモードに応じた有効ワードを読む
  * シート構成: A=中国輸入有効, B=国内会社有効, C=ワード, D=種類, E=メモ
+ * 種類=装飾語 は**除外しない**（抽出段階で残し、メイン判定でサブに降格する扱い）
  */
 function loadExcludeWords(mode) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var ws = ss.getSheetByName(SHEET_NAMES.EXCLUDES);
   if (!ws) return {};
   var data = ws.getDataRange().getValues();
-  var modeColIdx = (mode === MODES.DOMESTIC) ? 1 : 0;  // 0-indexed
+  var modeColIdx = (mode === MODES.DOMESTIC) ? 1 : 0;
   var wordColIdx = 2;
+  var typeColIdx = 3;
   var excludeMap = {};
   for (var i = 1; i < data.length; i++) {
     var enabled = data[i][modeColIdx];
     var word    = String(data[i][wordColIdx] || '').trim();
-    if (word && enabled === true) excludeMap[word] = true;
+    var type    = String(data[i][typeColIdx] || '').trim();
+    if (!word || enabled !== true) continue;
+    if (type === '装飾語') continue;  // 装飾語は抽出フェーズでは除外しない
+    excludeMap[word] = true;
   }
   return excludeMap;
+}
+
+/**
+ * 装飾語（種類=装飾語 かつ 有効）を返す
+ * メインワード判定で降格（subに回す）用途
+ */
+function loadDecorativeWords(mode) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ws = ss.getSheetByName(SHEET_NAMES.EXCLUDES);
+  if (!ws) return {};
+  var data = ws.getDataRange().getValues();
+  var modeColIdx = (mode === MODES.DOMESTIC) ? 1 : 0;
+  var map = {};
+  for (var i = 1; i < data.length; i++) {
+    var enabled = data[i][modeColIdx];
+    var word    = String(data[i][2] || '').trim();
+    var type    = String(data[i][3] || '').trim();
+    if (word && enabled === true && type === '装飾語') map[word] = true;
+  }
+  return map;
 }
 
 function isProductExcluded(itemName, mode) {

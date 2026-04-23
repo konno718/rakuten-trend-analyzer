@@ -415,10 +415,9 @@ function seedDisposableWords() {
   initExcludeWordsSheet(ss);
   var ws = ss.getSheetByName(SHEET_NAMES.EXCLUDES);
 
-  // D列(種類)の入力規則を「消耗品」含む標準セットに更新
-  // （既存規則に「消耗品」が無いと setValues が弾かれるため）
+  // D列(種類)の入力規則を最新版に更新
   var typeRule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['!検索タグ', '!マーケ', '!品質', 'デザイン', '機能', '季節タグ', '状態', '汎用語', '補助語', '自動検出', 'ブランド', '消耗品'], true)
+    .requireValueInList(['!検索タグ', '!マーケ', '!品質', 'デザイン', '機能', '季節タグ', '状態', '汎用語', '補助語', '自動検出', 'ブランド', '消耗品', '装飾語'], true)
     .setAllowInvalid(true).build();
   ws.getRange(2, 4, Math.max(1, ws.getMaxRows() - 1), 1).setDataValidation(typeRule);
 
