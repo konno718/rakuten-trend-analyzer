@@ -397,13 +397,13 @@ function initTagDictSheet(ss) {
 }
 
 /**
- * お宝分析シート初期化
+ * 推奨ワードシート初期化（モード別2枚: 推奨ワード_中国輸入 / 推奨ワード_国内メーカー）
  * 列: 日付, 出現回数, 区分, ジャンル, メインワード, サブワード, 評価, 新規参入, URL1..URL6
  */
-function initHiddenGemSheet(ss) {
+function initSuggestSheet(ss, mode) {
   var headers = ['日付', '出現回数', '区分', 'ジャンル', 'メインワード', 'サブワード', '評価', '新規参入'];
   for (var u = 1; u <= HIDDEN_GEM_URL_COUNT; u++) headers.push('URL' + u);
-  return getOrCreateSheet(ss, SHEET_NAMES.HIDDEN_GEM, headers);
+  return getOrCreateSheet(ss, getSuggestSheetName(mode), headers);
 }
 
 /**

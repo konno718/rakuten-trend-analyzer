@@ -105,7 +105,8 @@ function runSetup() {
   initSurveyedSheet(ss);
   initWordPoolSheet(ss);
   initTagDictSheet(ss);
-  initHiddenGemSheet(ss);
+  initSuggestSheet(ss, MODES.CHINA);
+  initSuggestSheet(ss, MODES.DOMESTIC);
   migrateExcludeCandidatesTo5Col();
   migrateWordPoolToV2();
   seedDisposableWords();

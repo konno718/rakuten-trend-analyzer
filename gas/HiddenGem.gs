@@ -11,12 +11,12 @@ function runHiddenGemAnalysis() {
   var startTime = new Date();
   var dateStr = Utilities.formatDate(startTime, 'Asia/Tokyo', 'yyyy-MM-dd');
   var currentMonth = startTime.getMonth() + 1;
-  Logger.log('=== お宝分析開始: ' + dateStr + ' ===');
+  Logger.log('=== 推奨ワード分析開始: ' + dateStr + ' ===');
 
   var config = getConfig();
   var disposables = loadDisposableWords();
-  var wordPool    = loadWordPoolByGenre();   // {genre: {word: 'main'|'sub'}}
-  var poolHits    = loadWordPoolHitsByGenre();// {genre: {word: totalHits}}
+  var wordPool    = loadWordPoolByGenre();
+  var poolHits    = loadWordPoolHitsByGenre();
   var surveyed    = loadSurveyedWords();
 
   Logger.log('消耗品 ' + Object.keys(disposables).length
@@ -34,7 +34,9 @@ function runHiddenGemAnalysis() {
   genreConfigs = uniqueConfigs;
 
   var deadline = new Date(startTime.getTime() + 5 * 60 * 1000);
-  var allRows = [];
+  var rowsByMode = {};
+  rowsByMode[MODES.CHINA]    = [];
+  rowsByMode[MODES.DOMESTIC] = [];
 
   for (var gi = 0; gi < genreConfigs.length; gi++) {
     if (new Date() >= deadline) {
@@ -49,34 +51,35 @@ function runHiddenGemAnalysis() {
     }
 
     var rows = analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, config, currentMonth);
-    allRows = allRows.concat(rows);
+    rowsByMode[gc.mode] = rowsByMode[gc.mode].concat(rows);
     Logger.log('[' + gc.genreName + '] 出力 ' + rows.length + '行');
   }
 
-  if (allRows.length === 0) {
-    Logger.log('書き込み対象なし');
-    return;
-  }
-
-  // NEW判定（過去14日間のお宝分析履歴と照合）
-  var past = loadHiddenGemHistory(HIDDEN_GEM_NEW_DAYS);
-  for (var r = 0; r < allRows.length; r++) {
-    var key = allRows[r].genre + '::' + allRows[r].word;
-    var p = past[key];
-    if (!p) {
-      allRows[r].newStatus = 'NEW!';
-    } else {
-      var pSet = {};
-      (p.subWords || []).forEach(function(s){ pSet[s] = true; });
-      var hasNewSub = false;
-      (allRows[r].subWords || []).forEach(function(s){ if (!pSet[s]) hasNewSub = true; });
-      allRows[r].newStatus = hasNewSub ? '🔄更新' : '既存';
+  var totalWritten = 0;
+  [MODES.CHINA, MODES.DOMESTIC].forEach(function(mode) {
+    var rows = rowsByMode[mode];
+    if (rows.length === 0) return;
+    // NEW判定（モード別の推奨ワードシート過去14日履歴）
+    var past = loadHiddenGemHistory(HIDDEN_GEM_NEW_DAYS, mode);
+    for (var r = 0; r < rows.length; r++) {
+      var key = rows[r].genre + '::' + rows[r].word;
+      var p = past[key];
+      if (!p) {
+        rows[r].newStatus = 'NEW!';
+      } else {
+        var pSet = {};
+        (p.subWords || []).forEach(function(s){ pSet[s] = true; });
+        var hasNewSub = false;
+        (rows[r].subWords || []).forEach(function(s){ if (!pSet[s]) hasNewSub = true; });
+        rows[r].newStatus = hasNewSub ? '🔄更新' : '既存';
+      }
     }
-  }
+    writeHiddenGemResults(rows, dateStr, mode);
+    totalWritten += rows.length;
+  });
 
-  writeHiddenGemResults(allRows, dateStr);
   var elapsed = (new Date() - startTime) / 1000;
-  Logger.log('=== お宝分析完了: ' + allRows.length + '行 / ' + elapsed.toFixed(1) + '秒 ===');
+  Logger.log('=== 推奨ワード分析完了: 総' + totalWritten + '行 / ' + elapsed.toFixed(1) + '秒 ===');
 }
 
 /**
@@ -172,24 +175,37 @@ function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, c
     // 上位商品URL（rank昇順）
     var topProducts = g.products.slice().sort(function(a, b) { return a.rank - b.rank; });
 
+    // 3区分判定
+    //  pool main 該当           → 定番ワード
+    //  pool外 × 複数商品共起    → 新着ワード
+    //  pool外 × 1商品のみ       → レアワード
+    var cnt = g.products.length;
+    var type;
+    if (!g.isTreasure) {
+      type = '定番ワード';
+    } else if (cnt >= 2) {
+      type = '新着ワード';
+    } else {
+      type = 'レアワード';
+    }
+
     rows.push({
       genre       : gc.genreName,
       word        : mw,
       subWords    : subs,
-      count       : g.products.length,
-      type        : g.isTreasure ? 'お宝候補' : 'メインワード',
+      count       : cnt,
+      type        : type,
       evaluation  : SCORE_RULES.HIDDEN_GEM.label,
       products    : topProducts.slice(0, HIDDEN_GEM_URL_COUNT),
       backgroundColor: bg,
     });
   }
 
-  // ソート: 出現回数desc、同数ならお宝優先
+  // ソート: 出現回数desc → 新着ワード優先 → 定番ワード → レアワード
   rows.sort(function(a, b) {
     if (b.count !== a.count) return b.count - a.count;
-    if (a.type === 'お宝候補' && b.type !== 'お宝候補') return -1;
-    if (b.type === 'お宝候補' && a.type !== 'お宝候補') return 1;
-    return 0;
+    var order = { '新着ワード': 0, '定番ワード': 1, 'レアワード': 2 };
+    return (order[a.type] || 9) - (order[b.type] || 9);
   });
   return rows.slice(0, HIDDEN_GEM_MAX_PER_GENRE);
 }
@@ -330,11 +346,12 @@ function loadWordPoolHitsByGenre() {
 }
 
 /**
- * 過去 daysBack 日以内のお宝分析履歴 (ジャンル::メインワード → {subWords})
+ * 過去 daysBack 日以内のモード別推奨ワード履歴 (ジャンル::メインワード → {subWords})
+ * NEW/更新判定用
  */
-function loadHiddenGemHistory(daysBack) {
+function loadHiddenGemHistory(daysBack, mode) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var ws = ss.getSheetByName(SHEET_NAMES.HIDDEN_GEM);
+  var ws = ss.getSheetByName(getSuggestSheetName(mode));
   if (!ws || ws.getLastRow() < 2) return {};
   var cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - daysBack);
@@ -356,12 +373,13 @@ function loadHiddenGemHistory(daysBack) {
 }
 
 /**
- * お宝分析シートに行追加（蓄積式・背景色セット）
+ * モード別推奨ワードシートに行追加（蓄積式・背景色セット）
  */
-function writeHiddenGemResults(rows, dateStr) {
+function writeHiddenGemResults(rows, dateStr, mode) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var ws = ss.getSheetByName(SHEET_NAMES.HIDDEN_GEM);
-  if (!ws) ws = initHiddenGemSheet(ss);
+  var sheetName = getSuggestSheetName(mode);
+  var ws = ss.getSheetByName(sheetName);
+  if (!ws) ws = initSuggestSheet(ss, mode);
 
   var totalCols = 8 + HIDDEN_GEM_URL_COUNT;
   var values = [];
@@ -392,5 +410,5 @@ function writeHiddenGemResults(rows, dateStr) {
   var startRow = ws.getLastRow() + 1;
   ws.getRange(startRow, 1, values.length, totalCols).setValues(values);
   ws.getRange(startRow, 1, bgColors.length, totalCols).setBackgrounds(bgColors);
-  Logger.log('お宝分析シートに ' + values.length + '行書き込み');
+  Logger.log('[' + mode + '] 推奨ワードシートに ' + values.length + '行書き込み');
 }

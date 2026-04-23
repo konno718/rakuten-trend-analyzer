@@ -17,7 +17,8 @@ const SHEET_NAMES = {
   WORD_POOL        : '語彙プール',
   TAG_DICT         : 'タグ辞書',
   SURVEYED         : '調査済みワード',
-  HIDDEN_GEM       : 'お宝分析',
+  SUGGEST_CHINA    : '推奨ワード_中国輸入',
+  SUGGEST_DOMESTIC : '推奨ワード_国内メーカー',
   SUMMARY          : 'サマリー',
 };
 
@@ -63,6 +64,10 @@ const WP_CHECKPOINT_INDEX_KEY = 'WP_CHECKPOINT_INDEX';
 
 function getRankingSheetName(mode) {
   return mode === MODES.DOMESTIC ? SHEET_NAMES.RANKING_DOMESTIC : SHEET_NAMES.RANKING_CHINA;
+}
+
+function getSuggestSheetName(mode) {
+  return mode === MODES.DOMESTIC ? SHEET_NAMES.SUGGEST_DOMESTIC : SHEET_NAMES.SUGGEST_CHINA;
 }
 
 function getConfig() {
