@@ -131,28 +131,22 @@ function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, c
     assignAiMainWords(treasures, config.geminiApiKey, gc.genreName);
   }
 
-  // グループ集計（メインワードごと）
+  // グループ集計（メインワードごと・サブ候補は整数カウントで蓄積）
   var groups = {};  // mainWord → {products:[], subFreq:{}, isTreasure:bool}
   for (var a = 0; a < analyses.length; a++) {
     var ana = analyses[a];
     var main = ana.primaryMain || ana.aiMain || '';
-    if (!main) continue;  // AI失敗したもの（元ワード不明）は出力しない
+    if (!main) continue;
     if (!groups[main]) {
       groups[main] = { products: [], subFreq: {}, isTreasure: !ana.primaryMain };
     }
     groups[main].products.push(ana.product);
-    // サブワード候補を集計（pool sub + otherMains + unknowns もサブ候補として）
-    var subCandidates = ana.subs.concat(ana.otherMains);
-    for (var s = 0; s < subCandidates.length; s++) {
-      var sw = subCandidates[s];
+    // サブ候補: pool sub + 他のmain + unknowns 全部1回として集計
+    var all = ana.subs.concat(ana.otherMains, ana.unknowns);
+    for (var s = 0; s < all.length; s++) {
+      var sw = all[s];
       if (sw === main) continue;
       groups[main].subFreq[sw] = (groups[main].subFreq[sw] || 0) + 1;
-    }
-    // unknowns も少しだけ混ぜる（pool未登録だが共起）
-    for (var su = 0; su < ana.unknowns.length; su++) {
-      var usw = ana.unknowns[su];
-      if (usw === main) continue;
-      groups[main].subFreq[usw] = (groups[main].subFreq[usw] || 0) + 0.5;  // unknownは半分の重み
     }
   }
 
@@ -166,10 +160,8 @@ function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, c
     var surv = surveyed[gc.genreName + '::' + mw];
     if (surv && surv.status === '永久非表示') continue;
 
-    // サブワードTop10（出現回数desc）
-    var subs = Object.keys(g.subFreq)
-      .sort(function(a, b) { return g.subFreq[b] - g.subFreq[a]; })
-      .slice(0, 10);
+    // サブワードTop10 (4段階優先: pool sub & 複数回 → pool sub & 1回 → その他 & 複数回 → その他 & 1回)
+    var subs = pickTopSubWords(g.subFreq, genrePool, 10);
 
     // 背景色
     var bg = null;
@@ -200,6 +192,42 @@ function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, c
     return 0;
   });
   return rows.slice(0, HIDDEN_GEM_MAX_PER_GENRE);
+}
+
+/**
+ * サブワードTop N を4段階優先ルールで選定
+ * 優先順位:
+ *   1. 語彙プール sub分類 × 複数回出現
+ *   2. 語彙プール sub分類 × 1回のみ
+ *   3. 語彙プール外          × 複数回出現
+ *   4. 語彙プール外          × 1回のみ
+ * 各段階内では出現回数desc順
+ */
+function pickTopSubWords(subFreq, genrePool, maxN) {
+  var poolSubMulti = [];
+  var poolSubOne   = [];
+  var otherMulti   = [];
+  var otherOne     = [];
+  var words = Object.keys(subFreq);
+  for (var i = 0; i < words.length; i++) {
+    var w = words[i];
+    var f = subFreq[w];
+    var isPoolSub = (genrePool[w] === 'sub');
+    if (isPoolSub && f >= 2) poolSubMulti.push({word: w, freq: f});
+    else if (isPoolSub)       poolSubOne.push({word: w, freq: f});
+    else if (f >= 2)          otherMulti.push({word: w, freq: f});
+    else                      otherOne.push({word: w, freq: f});
+  }
+  var byFreqDesc = function(a, b) { return b.freq - a.freq; };
+  poolSubMulti.sort(byFreqDesc);
+  poolSubOne.sort(byFreqDesc);
+  otherMulti.sort(byFreqDesc);
+  otherOne.sort(byFreqDesc);
+  var out = [];
+  [poolSubMulti, poolSubOne, otherMulti, otherOne].forEach(function(g) {
+    for (var j = 0; j < g.length && out.length < maxN; j++) out.push(g[j].word);
+  });
+  return out;
 }
 
 /**
