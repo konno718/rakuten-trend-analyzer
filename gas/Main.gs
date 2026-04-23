@@ -22,17 +22,31 @@ function runDailyCollection() {
     throw new Error('有効なジャンル設定がありません。設定シートを確認してください。');
   }
 
-  var excludeMap    = loadExcludeWords();
-  var pastKeywordMap = getPastKeywordMap(30);
+  // モード別除外ワード
+  var excludeMaps = {};
+  excludeMaps[MODES.CHINA]    = loadExcludeWords(MODES.CHINA);
+  excludeMaps[MODES.DOMESTIC] = loadExcludeWords(MODES.DOMESTIC);
+  Logger.log('除外ワード 中国輸入:' + Object.keys(excludeMaps[MODES.CHINA]).length
+             + ' 国内:' + Object.keys(excludeMaps[MODES.DOMESTIC]).length);
 
-  Logger.log('除外ワード数: ' + Object.keys(excludeMap).length);
+  // モード別 過去キーワード
+  var pastMaps = {};
+  pastMaps[MODES.CHINA]    = getPastKeywordMap(30, MODES.CHINA);
+  pastMaps[MODES.DOMESTIC] = getPastKeywordMap(30, MODES.DOMESTIC);
 
-  var allResults = [];
+  var resultsByMode = {};
+  resultsByMode[MODES.CHINA]    = [];
+  resultsByMode[MODES.DOMESTIC] = [];
+
+  var genreCountByMode = {};
+  genreCountByMode[MODES.CHINA]    = 0;
+  genreCountByMode[MODES.DOMESTIC] = 0;
 
   for (var i = 0; i < genreConfigs.length; i++) {
     var gc = genreConfigs[i];
+    genreCountByMode[gc.mode]++;
     try {
-      Logger.log('処理中: ' + gc.genreName);
+      Logger.log('処理中: ' + gc.genreName + ' [' + gc.mode + ']');
 
       var genreId = parseGenreIdFromUrl(gc.rakutenUrl);
       if (!genreId) {
@@ -40,18 +54,18 @@ function runDailyCollection() {
         continue;
       }
 
-      var items     = fetchRakutenRanking(config.rakutenAppId, genreId, RANKING_TOP_N);
-      if (items.length === 0) { continue; }
+      var items = fetchRakutenRanking(config.rakutenAppId, genreId, RANKING_TOP_N);
+      if (items.length === 0) continue;
 
-      var processed = processItems(items, excludeMap);
+      var processed = processItems(items, excludeMaps[gc.mode], gc.mode);
       var results   = aggregateKeywords(processed, gc.genreName, dateStr);
 
       for (var j = 0; j < results.length; j++) {
         var key = results[j].genre + '::' + results[j].keyword;
-        results[j].isNew = !pastKeywordMap[key];
+        results[j].isNew = !pastMaps[gc.mode][key];
       }
+      for (var k = 0; k < results.length; k++) resultsByMode[gc.mode].push(results[k]);
 
-      for (var k = 0; k < results.length; k++) allResults.push(results[k]);
       Utilities.sleep(1000);
 
     } catch(e) {
@@ -60,21 +74,32 @@ function runDailyCollection() {
     }
   }
 
-  if (allResults.length === 0) {
+  var totalResults = resultsByMode[MODES.CHINA].length + resultsByMode[MODES.DOMESTIC].length;
+  if (totalResults === 0) {
     Logger.log('結果が0件です');
     return;
   }
 
-  var newEntrantMap = {};
-  for (var n = 0; n < allResults.length; n++) {
-    if (allResults[n].isNew) newEntrantMap[allResults[n].genre + '::' + allResults[n].keyword] = true;
+  // モード別に書き込み
+  var allResults = [];
+  var modeKeys = [MODES.CHINA, MODES.DOMESTIC];
+  for (var mi = 0; mi < modeKeys.length; mi++) {
+    var mk = modeKeys[mi];
+    var modeResults = resultsByMode[mk];
+    if (modeResults.length === 0) continue;
+
+    var newEntrantMap = {};
+    for (var n = 0; n < modeResults.length; n++) {
+      if (modeResults[n].isNew) newEntrantMap[modeResults[n].genre + '::' + modeResults[n].keyword] = true;
+    }
+
+    writeData(modeResults, dateStr, newEntrantMap, mk);
+
+    var candidates = detectHighFrequencyCandidates(modeResults, Math.max(1, genreCountByMode[mk]));
+    writeExcludeCandidates(candidates, dateStr, mk);
+
+    for (var r = 0; r < modeResults.length; r++) allResults.push(modeResults[r]);
   }
-
-  writeWordStats(allResults, dateStr, newEntrantMap);
-  writeProducts(allResults, dateStr);
-
-  var candidates = detectHighFrequencyCandidates(allResults, genreConfigs.length);
-  writeExcludeCandidates(candidates, dateStr);
 
   if (config.discordWebhook) sendDailyDigest(config.discordWebhook, allResults, dateStr);
 
@@ -94,11 +119,14 @@ function runTest() {
   var genreId = parseGenreIdFromUrl(gc.rakutenUrl);
   var items   = fetchRakutenRanking(config.rakutenAppId, genreId, 30);
 
-  Logger.log('取得件数: ' + items.length);
-  if (items.length > 0) Logger.log('サンプル: ' + items[0].itemName);
+  Logger.log('取得件数: ' + items.length + ' モード: ' + gc.mode);
+  if (items.length > 0) {
+    Logger.log('サンプル(元): ' + items[0].itemName);
+    Logger.log('サンプル(整形後): ' + cleanTitlePrefix(items[0].itemName));
+  }
 
-  var excludeMap = loadExcludeWords();
-  var processed  = processItems(items, excludeMap);
+  var excludeMap = loadExcludeWords(gc.mode);
+  var processed  = processItems(items, excludeMap, gc.mode);
   var results    = aggregateKeywords(processed, gc.genreName, 'test');
 
   Logger.log('キーワード数: ' + results.length);
@@ -114,7 +142,8 @@ function runSetup() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   createSettingsTemplate(ss);
   initExcludeWordsSheet(ss);
-  Logger.log('セットアップ完了。設定シートにジャンルURLを入力してください。');
+  migrateExcludeCandidatesTo5Col();
+  Logger.log('セットアップ完了。設定シートにジャンルURL・モードを入力してください。');
 }
 
 // 自動トリガー登録（一度だけ実行）

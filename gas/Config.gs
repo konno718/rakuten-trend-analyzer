@@ -2,12 +2,18 @@
 
 const SHEET_ID = '1zqXH-cssTIf976gLhVs5QO2p3W0FfB_74x6nKn1K_uU';
 
+const MODES = {
+  CHINA    : '中国輸入',
+  DOMESTIC : '国内メーカー',
+};
+
 const SHEET_NAMES = {
-  SETTINGS : '設定',
-  WORDS    : 'ワード集計',
-  PRODUCTS : '商品一覧',
-  EXCLUDES : '除外ワード',
-  SUMMARY  : 'サマリー',
+  SETTINGS      : '設定',
+  DATA_CHINA    : 'データ_中国輸入',
+  DATA_DOMESTIC : 'データ_国内メーカー',
+  EXCLUDES      : '除外ワード',
+  CANDIDATES    : '除外候補',
+  SUMMARY       : 'サマリー',
 };
 
 const SCORE_RULES = {
@@ -17,6 +23,16 @@ const SCORE_RULES = {
 };
 
 const RANKING_TOP_N = 300;
+const PRODUCTS_PER_KEYWORD = 5;  // データシートに横展開する上位商品数
+
+function getDataSheetName(mode) {
+  return mode === MODES.DOMESTIC ? SHEET_NAMES.DATA_DOMESTIC : SHEET_NAMES.DATA_CHINA;
+}
+
+// 除外ワード/除外候補シートの「有効」列 (1-based)
+function getExcludeColumnForMode(mode) {
+  return mode === MODES.DOMESTIC ? 2 : 1;  // A=中国輸入, B=国内会社
+}
 
 function getConfig() {
   const props = PropertiesService.getScriptProperties();
