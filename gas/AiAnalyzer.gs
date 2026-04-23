@@ -2,23 +2,30 @@
 
 /**
  * Gemini API を使ってジャンル内のワード群を「メインワード + サブワード」に分類
- * 入力: ジャンル内のワード配列（.word, .subWords, .isMainWord, .count 等）
- * 出力: 同じ配列構造だが .word と .subWords が Gemini の判定で上書きされる
- * APIキー未設定なら元の配列をそのまま返す
+ * 入力が多い場合は GEMINI_BATCH_SIZE 毎に分割して複数回呼び出す。
+ * 各エントリの .word / .subWords を Gemini の判定で上書き。
  */
 function analyzeWithGemini(apiKey, genreName, classified) {
   if (!apiKey || classified.length === 0) return classified;
 
-  var items = classified.map(function(x, i) {
-    return {
-      id       : i,
-      word     : x.word,
-      subWords : (x.subWords || []).slice(0, 15),
-      inPool   : !!x.isMainWord,
-      count    : x.count || 0,
-    };
-  });
+  var total = classified.length;
+  for (var start = 0; start < total; start += GEMINI_BATCH_SIZE) {
+    var end = Math.min(start + GEMINI_BATCH_SIZE, total);
+    var batch = [];
+    for (var i = start; i < end; i++) {
+      batch.push({
+        id       : i,
+        word     : classified[i].word,
+        subWords : (classified[i].subWords || []).slice(0, 15),
+        inPool   : !!classified[i].isMainWord,
+      });
+    }
+    analyzeGeminiBatch(apiKey, genreName, classified, batch);
+  }
+  return classified;
+}
 
+function analyzeGeminiBatch(apiKey, genreName, classified, batch) {
   var prompt = [
     '楽天ランキング「' + genreName + '」ジャンルのワード群を分析してください。',
     '',
@@ -27,22 +34,23 @@ function analyzeWithGemini(apiKey, genreName, classified) {
     '- inPoolがtrueのものは楽天が認識している語なので、メインワード候補として優先',
     '- サブワードはそのワードに紐づく付加価値（素材・サイズ・用途・形状等）',
     '- 既存のword/subWordsが適切ならそのまま使ってOK',
-    '- 判定不能なら元のwordをそのままmainWordに',
     '',
     '出力はJSON配列のみ（説明文なし・厳密なJSON）:',
     '[{"id":0,"mainWord":"...","subWords":["...","..."]}, ...]',
     '',
     '入力:',
-    JSON.stringify(items)
+    JSON.stringify(batch)
   ].join('\n');
 
   var url = GEMINI_API_URL_BASE + GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(apiKey);
   var payload = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
-      temperature       : 0.3,
-      maxOutputTokens   : GEMINI_MAX_TOKENS,
-      responseMimeType  : 'application/json',
+      temperature      : 0.3,
+      maxOutputTokens  : GEMINI_MAX_TOKENS,
+      responseMimeType : 'application/json',
+      // 思考モードを無効化（出力トークンを温存）
+      thinkingConfig   : { thinkingBudget: 0 },
     }
   };
 
@@ -54,26 +62,20 @@ function analyzeWithGemini(apiKey, genreName, classified) {
       muteHttpExceptions: true,
     });
     if (response.getResponseCode() !== 200) {
-      Logger.log('Gemini API error (' + response.getResponseCode() + '): ' + response.getContentText().substring(0, 500));
-      return classified;
+      Logger.log('Gemini API error (' + response.getResponseCode() + '): ' + response.getContentText().substring(0, 400));
+      return;
     }
     var body = JSON.parse(response.getContentText());
     var candidate = body.candidates && body.candidates[0];
     if (!candidate || !candidate.content || !candidate.content.parts) {
-      Logger.log('Gemini応答にcontentが無い: ' + JSON.stringify(body).substring(0, 300));
-      return classified;
+      Logger.log('Gemini応答にcontentなし: ' + JSON.stringify(body).substring(0, 300));
+      return;
     }
     var text = candidate.content.parts.map(function(p){ return p.text || ''; }).join('');
-    var jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      Logger.log('Gemini応答にJSONが見つからず: ' + text.substring(0, 300));
-      return classified;
-    }
-    var parsed;
-    try { parsed = JSON.parse(jsonMatch[0]); }
-    catch(e) {
-      Logger.log('Gemini JSONパース失敗: ' + e + ' / ' + jsonMatch[0].substring(0, 300));
-      return classified;
+    var parsed = tryParseJsonArray(text);
+    if (!parsed) {
+      Logger.log('Gemini JSONパース失敗 [' + genreName + ']: ' + text.substring(0, 300));
+      return;
     }
     for (var i = 0; i < parsed.length; i++) {
       var r = parsed[i];
@@ -81,10 +83,41 @@ function analyzeWithGemini(apiKey, genreName, classified) {
       if (r.mainWord) classified[r.id].word = r.mainWord;
       if (Array.isArray(r.subWords)) classified[r.id].subWords = r.subWords.slice(0, 10);
     }
-    Logger.log('[' + genreName + '] Gemini分析完了 ' + parsed.length + '件');
+    Logger.log('[' + genreName + '] Gemini batch ' + parsed.length + '/' + batch.length);
   } catch(e) {
     Logger.log('Gemini API fetch error: ' + e);
   }
+}
 
-  return classified;
+/**
+ * 想定どおりのJSON配列ならそのまま、途中で切れている場合は有効な要素だけ抽出
+ */
+function tryParseJsonArray(text) {
+  var match = text.match(/\[[\s\S]*\]/);
+  if (match) {
+    try { return JSON.parse(match[0]); } catch(e) { /* fallthrough */ }
+  }
+  // 切れた配列から完全なオブジェクト要素だけを復旧
+  var openIdx = text.indexOf('[');
+  if (openIdx < 0) return null;
+  var items = [];
+  var depth = 0;
+  var start = -1;
+  for (var i = openIdx; i < text.length; i++) {
+    var ch = text.charAt(i);
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        var chunk = text.substring(start, i + 1);
+        try {
+          items.push(JSON.parse(chunk));
+        } catch(e) { /* skip */ }
+        start = -1;
+      }
+    }
+  }
+  return items.length > 0 ? items : null;
 }

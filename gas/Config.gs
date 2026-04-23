@@ -52,9 +52,10 @@ const HIDDEN_GEM_COLOR_SURVEYED = '#F0F0F0'; // 調査済み・非該当月
 const HIDDEN_GEM_COLOR_RECALL   = '#E8F0FE'; // 調査済み・再表示月
 
 // === Gemini API ===
-const GEMINI_MODEL        = 'gemini-2.5-flash';
+const GEMINI_MODEL        = 'gemini-2.5-flash-lite';  // シンプルなJSON整形用に高速版
 const GEMINI_API_URL_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
-const GEMINI_MAX_TOKENS   = 4000;
+const GEMINI_MAX_TOKENS   = 8192;
+const GEMINI_BATCH_SIZE   = 25;  // 1回のプロンプトに含めるワード数上限
 
 // === チェックポイント用ScriptPropertiesキー ===
 const WP_CHECKPOINT_DATE_KEY  = 'WP_CHECKPOINT_DATE';

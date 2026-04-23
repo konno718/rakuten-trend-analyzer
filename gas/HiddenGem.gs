@@ -27,9 +27,24 @@ function runHiddenGemAnalysis() {
              + ' / 調査済み ' + Object.keys(surveyed).length);
 
   var genreConfigs = readGenreConfigs();
+  // ジャンルID重複を除外（中国輸入/国内メーカー両モード登録されてても処理は1回）
+  var seen = {};
+  var uniqueConfigs = [];
+  for (var u = 0; u < genreConfigs.length; u++) {
+    var gid = parseGenreIdFromUrl(genreConfigs[u].rakutenUrl);
+    if (gid && !seen[gid]) { seen[gid] = true; uniqueConfigs.push(genreConfigs[u]); }
+  }
+  genreConfigs = uniqueConfigs;
+
+  // 時間切れ前に書き込めるよう deadline を持つ
+  var deadline = new Date(startTime.getTime() + 5 * 60 * 1000);
   var allRows = [];
 
   for (var gi = 0; gi < genreConfigs.length; gi++) {
+    if (new Date() >= deadline) {
+      Logger.log('時間切れ。未処理ジャンル ' + (genreConfigs.length - gi) + ' は次回実行に回します');
+      break;
+    }
     var gc = genreConfigs[gi];
     var rankWords = getRankingWordsForGenre(gc.genreName, gc.mode, dateStr);
     if (rankWords.length === 0) {
