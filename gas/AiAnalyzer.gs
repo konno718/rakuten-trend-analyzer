@@ -98,6 +98,72 @@ function analyzeGeminiBatch(apiKey, genreName, classified, batch) {
 }
 
 /**
+ * ワード群を Gemini で4分類 (カテゴリ/装飾語/対象/ブランド)
+ * 入力: { genreName, words: [string] }
+ * 出力: [{word, type}] (type: 'カテゴリ'|'装飾語'|'対象'|'ブランド')
+ */
+function categorizeWordsWithGemini(apiKey, genreName, words) {
+  if (!apiKey || words.length === 0) return [];
+
+  var prompt = [
+    '楽天ランキング「' + genreName + '」ジャンルの商品から抽出されたワード群を分析してください。',
+    '',
+    '各ワードを以下の4分類のどれか1つに判定してください:',
+    '- カテゴリ: 具体的な商品種別 (例: ゴミ箱, 充電器, ベビーカー, ベッド)',
+    '- ブランド: メーカー名・商品ブランド名 (例: 山崎実業, ロイヤルカナン, ニトリ, パンパース)',
+    '- 装飾語: 形容詞・属性・特性 (例: おしゃれ, 軽量, 防水, 北欧, シンプル)',
+    '- 対象: 利用者・場面・用途・状況 (例: 新生児, 出産祝い, 子供, 女性, ペット用)',
+    '',
+    '判定が難しい場合は「カテゴリ」として返してください。',
+    '',
+    '出力はJSON配列のみ（説明文なし）:',
+    '[{"word":"...","type":"カテゴリ|ブランド|装飾語|対象"}, ...]',
+    '',
+    '入力:',
+    JSON.stringify(words)
+  ].join('\n');
+
+  var url = GEMINI_API_URL_BASE + GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(apiKey);
+  var payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature      : 0.2,
+      maxOutputTokens  : GEMINI_MAX_TOKENS,
+      responseMimeType : 'application/json',
+      thinkingConfig   : { thinkingBudget: 0 },
+    }
+  };
+
+  try {
+    var response = UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json',
+      payload: JSON.stringify(payload), muteHttpExceptions: true,
+    });
+    if (response.getResponseCode() !== 200) {
+      Logger.log('Gemini categorize error ' + response.getResponseCode() + ': ' + response.getContentText().substring(0, 300));
+      return [];
+    }
+    var body = JSON.parse(response.getContentText());
+    var cand = body.candidates && body.candidates[0];
+    if (!cand || !cand.content || !cand.content.parts) return [];
+    var text = cand.content.parts.map(function(p){ return p.text || ''; }).join('');
+    var parsed = tryParseJsonArray(text);
+    if (!parsed) return [];
+
+    var results = [];
+    for (var i = 0; i < parsed.length; i++) {
+      var r = parsed[i];
+      if (typeof r.word !== 'string' || typeof r.type !== 'string') continue;
+      results.push({ word: r.word.trim(), type: r.type.trim() });
+    }
+    return results;
+  } catch(e) {
+    Logger.log('Gemini categorize fetch error: ' + e);
+    return [];
+  }
+}
+
+/**
  * 想定どおりのJSON配列ならそのまま、途中で切れている場合は有効な要素だけ抽出
  */
 function tryParseJsonArray(text) {

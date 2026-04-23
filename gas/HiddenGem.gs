@@ -487,6 +487,170 @@ function loadHiddenGemHistory(daysBack, mode) {
 }
 
 /**
+ * 推奨ワードのメインワードを Gemini で分類して、
+ * カテゴリ以外（装飾語/ブランド/対象）は除外候補シートに自動追加
+ * 既に除外ワード/除外候補登録済みの語は skip
+ * 両モードを巡回
+ */
+function validateMainWordsWithGemini() {
+  var config = getConfig();
+  if (!config.geminiApiKey) {
+    Logger.log('GEMINI_API_KEY 未設定。スキップ');
+    return;
+  }
+  _validateWordsByColumn(config.geminiApiKey, 'main');
+}
+
+/**
+ * 推奨ワードのサブワードを Gemini で分類
+ * メイン処理が終わってから手動実行する想定
+ */
+function validateSubWordsWithGemini() {
+  var config = getConfig();
+  if (!config.geminiApiKey) {
+    Logger.log('GEMINI_API_KEY 未設定。スキップ');
+    return;
+  }
+  _validateWordsByColumn(config.geminiApiKey, 'sub');
+}
+
+/**
+ * 内部実装: target='main' なら E列(メインワード)、'sub' なら F列(サブワード) を巡回
+ */
+function _validateWordsByColumn(apiKey, target) {
+  var startTime = new Date();
+  var dateStr = Utilities.formatDate(startTime, 'Asia/Tokyo', 'yyyy-MM-dd');
+  Logger.log('=== Gemini分類開始: ' + (target === 'main' ? 'メインワード' : 'サブワード') + ' / ' + dateStr + ' ===');
+
+  // 既存除外ワード・除外候補のワードを skip 用に集める
+  var alreadyKnown = _loadKnownExcludeWords();
+  Logger.log('既存除外ワード/除外候補: ' + Object.keys(alreadyKnown).length + '語');
+
+  [MODES.CHINA, MODES.DOMESTIC].forEach(function(mode) {
+    _processModeForValidation(apiKey, mode, target, alreadyKnown, dateStr);
+  });
+
+  var elapsed = (new Date() - startTime) / 1000;
+  Logger.log('=== Gemini分類完了 / ' + elapsed.toFixed(1) + '秒 ===');
+}
+
+function _processModeForValidation(apiKey, mode, target, alreadyKnown, dateStr) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ws = ss.getSheetByName(getSuggestSheetName(mode));
+  if (!ws || ws.getLastRow() < 2) return;
+
+  var data = ws.getRange(2, 1, ws.getLastRow() - 1, 6).getValues();
+  // ジャンル別にユニークワードを集める
+  var byGenre = {};  // genre → Set<word>
+  for (var i = 0; i < data.length; i++) {
+    var genre = String(data[i][3] || '').trim();
+    if (!genre) continue;
+    var words = [];
+    if (target === 'main') {
+      var mw = String(data[i][4] || '').trim();
+      if (mw) words.push(mw);
+    } else {
+      var subStr = String(data[i][5] || '').trim();
+      if (subStr) words = subStr.split(/[,，、]/).map(function(s){return s.trim();}).filter(function(s){return s;});
+    }
+    if (!byGenre[genre]) byGenre[genre] = {};
+    for (var w = 0; w < words.length; w++) {
+      var word = words[w];
+      if (!word || alreadyKnown[word]) continue;  // 既に除外ワード/候補にあるなら skip
+      byGenre[genre][word] = true;
+    }
+  }
+
+  // ジャンル毎に Gemini で分類
+  var totalCategorized = 0;
+  var totalRegistered = 0;
+  Object.keys(byGenre).forEach(function(genre) {
+    var words = Object.keys(byGenre[genre]);
+    if (words.length === 0) return;
+
+    // バッチ50ずつ
+    var BATCH = 50;
+    for (var start = 0; start < words.length; start += BATCH) {
+      var batch = words.slice(start, Math.min(start + BATCH, words.length));
+      var results = categorizeWordsWithGemini(apiKey, genre, batch);
+      totalCategorized += results.length;
+
+      // カテゴリ以外を除外候補に追加
+      var toRegister = [];
+      for (var r = 0; r < results.length; r++) {
+        var item = results[r];
+        if (item.type === 'カテゴリ') continue;
+        // 「対象」も装飾語として扱う
+        var typeLabel = (item.type === 'ブランド') ? 'ブランド' : '装飾語';
+        toRegister.push({ word: item.word, type: typeLabel });
+      }
+      if (toRegister.length > 0) {
+        _appendExcludeCandidates(toRegister, dateStr, mode);
+        totalRegistered += toRegister.length;
+        // 次回スキップ用
+        for (var t = 0; t < toRegister.length; t++) {
+          alreadyKnown[toRegister[t].word] = true;
+        }
+      }
+      Utilities.sleep(500);  // Gemini レート保護
+    }
+  });
+
+  Logger.log('[' + mode + '] Gemini判定 ' + totalCategorized + '件 / 除外候補登録 ' + totalRegistered + '件');
+}
+
+/**
+ * 既存の除外ワード(全モード) + 除外候補(ワード列) を集めた set を返す
+ */
+function _loadKnownExcludeWords() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var set = {};
+  // 除外ワード
+  var ex = ss.getSheetByName(SHEET_NAMES.EXCLUDES);
+  if (ex && ex.getLastRow() >= 2) {
+    var d = ex.getRange(2, 3, ex.getLastRow() - 1, 1).getValues();
+    for (var i = 0; i < d.length; i++) {
+      var w = String(d[i][0] || '').trim();
+      if (w) set[w] = true;
+    }
+  }
+  // 除外候補
+  var ca = ss.getSheetByName(SHEET_NAMES.CANDIDATES);
+  if (ca && ca.getLastRow() >= 2) {
+    var d2 = ca.getRange(2, 3, ca.getLastRow() - 1, 1).getValues();
+    for (var j = 0; j < d2.length; j++) {
+      var w2 = String(d2[j][0] || '').trim();
+      if (w2) set[w2] = true;
+    }
+  }
+  return set;
+}
+
+/**
+ * 除外候補シートに新規行を追加 (Gemini 判定結果用)
+ * items: [{word, type}]
+ */
+function _appendExcludeCandidates(items, dateStr, mode) {
+  if (items.length === 0) return;
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ws = ss.getSheetByName(SHEET_NAMES.CANDIDATES);
+  if (!ws) return;
+  var newRows = [];
+  for (var i = 0; i < items.length; i++) {
+    newRows.push([
+      false,         // 中国輸入有効
+      false,         // 国内会社有効
+      items[i].word, // ワード
+      items[i].type, // 種類 (装飾語 or ブランド)
+      'AI判定:' + mode + ' ' + dateStr,  // メモ
+    ]);
+  }
+  var startRow = ws.getLastRow() + 1;
+  ws.getRange(startRow, 1, newRows.length, 5).setValues(newRows);
+  ws.getRange(startRow, 1, newRows.length, 2).insertCheckboxes();
+}
+
+/**
  * モード別推奨ワードシートに書き込み
  * 同日の既存行があれば削除してから新規行を追加（同日再実行で結果が最新だけ残る）
  * 過去日分は残す（NEW判定用履歴として使う）
