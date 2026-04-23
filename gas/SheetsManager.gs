@@ -33,13 +33,17 @@ function readGenreConfigs() {
     var enabled = enabledRaw === true || (String(enabledRaw).trim() !== '×' && String(enabledRaw).trim() !== 'false' && String(enabledRaw).trim() !== 'FALSE');
     var keepaCat   = String(row[3] || '').trim();
     var modeRaw    = String(row[4] || '').trim();
-    var mode = (modeRaw === MODES.DOMESTIC) ? MODES.DOMESTIC : MODES.CHINA;  // デフォルト 中国輸入
+    var mode = (modeRaw === MODES.DOMESTIC) ? MODES.DOMESTIC : MODES.CHINA;
+    // G列(row[6]) = 分析開始順位、未指定なら1
+    var startRank = Number(row[6]);
+    if (!startRank || startRank < 1) startRank = 1;
     if (enabled && genreName && rakutenUrl) {
       configs.push({
         genreName  : genreName,
         rakutenUrl : rakutenUrl,
         keepaCat   : keepaCat,
         mode       : mode,
+        startRank  : startRank,
       });
     }
   }
@@ -49,17 +53,26 @@ function readGenreConfigs() {
 
 function createSettingsTemplate(ss) {
   var ws = getOrCreateSheet(ss, SHEET_NAMES.SETTINGS, [
-    'ジャンル名', '楽天ランキングURL', '有効', 'KeepaカテゴリID（任意）', 'モード', 'メモ'
+    'ジャンル名', '楽天ランキングURL', '有効', 'KeepaカテゴリID（任意）', 'モード', 'メモ', '分析開始順位'
   ]);
-  var samples = [
-    ['インテリア・寝具・収納',     'https://ranking.rakuten.co.jp/daily/100804/', true, '', '中国輸入',   ''],
-    ['ペット・ペットグッズ',       'https://ranking.rakuten.co.jp/daily/101213/', true, '', '中国輸入',   ''],
-    ['スポーツ・アウトドア',       'https://ranking.rakuten.co.jp/daily/101070/', true, '', '中国輸入',   ''],
-    ['日用品雑貨・文房具・手芸',   'https://ranking.rakuten.co.jp/daily/215783/', true, '', '中国輸入',   ''],
-    ['キッチン用品・食器・調理器具', 'https://ranking.rakuten.co.jp/daily/558944/', true, '', '中国輸入',   ''],
-    ['キッズ・ベビー・マタニティ', 'https://ranking.rakuten.co.jp/daily/100533/', true, '', '国内メーカー', ''],
-  ];
-  if (samples.length > 0) {
+  // 既存シートにヘッダ追加（G列が未設定なら追加）
+  if (ws.getLastRow() >= 1) {
+    var g1 = ws.getRange(1, 7).getValue();
+    if (!g1 || String(g1).trim() === '') {
+      ws.getRange(1, 7).setValue('分析開始順位')
+        .setBackground('#4A86E8').setFontColor('#FFFFFF').setFontWeight('bold');
+    }
+  }
+  // 新規シートのサンプルデータ（既存データあれば上書きしない）
+  if (ws.getLastRow() <= 1) {
+    var samples = [
+      ['インテリア・寝具・収納',     'https://ranking.rakuten.co.jp/daily/100804/', true, '', '中国輸入',   '', 1],
+      ['ペット・ペットグッズ',       'https://ranking.rakuten.co.jp/daily/101213/', true, '', '中国輸入',   '', 51],
+      ['スポーツ・アウトドア',       'https://ranking.rakuten.co.jp/daily/101070/', true, '', '中国輸入',   '', 1],
+      ['日用品雑貨・文房具・手芸',   'https://ranking.rakuten.co.jp/daily/215783/', true, '', '中国輸入',   '', 1],
+      ['キッチン用品・食器・調理器具', 'https://ranking.rakuten.co.jp/daily/558944/', true, '', '中国輸入',   '', 1],
+      ['キッズ・ベビー・マタニティ', 'https://ranking.rakuten.co.jp/daily/100533/', true, '', '国内メーカー', '', 1],
+    ];
     ws.getRange(2, 1, samples.length, samples[0].length).setValues(samples);
     ws.getRange(2, 3, samples.length, 1).insertCheckboxes();
   }

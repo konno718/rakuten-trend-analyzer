@@ -63,6 +63,13 @@ function runHiddenGemAnalysis() {
       continue;
     }
 
+    // 分析開始順位で絞り込み（例: 51位以降を分析対象にする等）
+    if (gc.startRank && gc.startRank > 1) {
+      var before = products.length;
+      products = products.filter(function(p) { return p.rank >= gc.startRank; });
+      Logger.log('[' + gc.genreName + '] 分析開始順位=' + gc.startRank + ' で絞り込み: ' + before + ' → ' + products.length);
+    }
+
     modeAccum[gc.mode].genreCount++;
     var rows = analyzeGenre(gc, products, wordPool[gc.mode] || {}, poolHits[gc.mode] || {}, disposables, surveyed, config, currentMonth, modeAccum[gc.mode].keywordGenres);
     rowsByMode[gc.mode] = rowsByMode[gc.mode].concat(rows);
