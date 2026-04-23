@@ -195,8 +195,26 @@ function analyzeGenre(gc, products, wordPool, poolHits, disposables, surveyed, c
 }
 
 /**
- * サブワードTop N を出現頻度優先で選定
- *   - 基準: 出現頻度 ≥ 2 のみ採用（1回のみは関連性低いので捨てる）
+ * サイズ・数量・重量・寸法・期間などの測定値を表すワードか判定
+ * 「3kg」「100ml」「30枚」「2L」「30x40cm」「10週間」等は除外したい
+ */
+function isMeasurementWord(word) {
+  if (!word) return false;
+  var w = String(word).trim();
+  if (/^\d+(\.\d+)?$/.test(w)) return true;                                     // 数字のみ
+  if (/^\d+(\.\d+)?(ml|mL|cc|l|L|ℓ|g|kg|mg|μg|oz|mm|cm|m|寸|枚|個|本|袋|箱|パック|缶|錠|粒|回|日|月|年|週|時間|分|秒|度|℃|畳|人用|台|人|坪)$/i.test(w)) return true;
+  if (/^(XXS|XS|S|M|L|LL|XL|XXL|XXXL|SS)$/.test(w)) return true;                // 衣料サイズ
+  if (/^\d+L$/.test(w)) return true;                                            // 2L 3L 4L
+  if (/^\d+[x×]\d+/.test(w)) return true;                                       // 30x40, 100×200
+  if (/^\d+(週間|ヶ月|か月|月齢|歳|才|年生)$/.test(w)) return true;              // 期間・年齢
+  if (/^\d+(個入|本入|枚入|個セット|本セット|枚セット|組|入)$/.test(w)) return true; // セット数
+  return false;
+}
+
+/**
+ * サブワードTop N を選定
+ *   - 除外: サイズ・数量・重量等の測定ワード
+ *   - 採用: freq>=1 全て（新規ワードも積極採用）
  *   - ソート: 頻度desc → 同値なら 語彙プール sub を優先
  */
 function pickTopSubWords(subFreq, genrePool, maxN) {
@@ -204,17 +222,16 @@ function pickTopSubWords(subFreq, genrePool, maxN) {
   var words = Object.keys(subFreq);
   for (var i = 0; i < words.length; i++) {
     var w = words[i];
-    var f = subFreq[w];
-    if (f < 2) continue;  // 複数回出現のみ
+    if (isMeasurementWord(w)) continue;  // サイズ/数量/重量/期間除外
     candidates.push({
       word      : w,
-      freq      : f,
+      freq      : subFreq[w],
       isPoolSub : genrePool[w] === 'sub',
     });
   }
   candidates.sort(function(a, b) {
-    if (b.freq !== a.freq) return b.freq - a.freq;                        // 頻度desc
-    return (b.isPoolSub ? 1 : 0) - (a.isPoolSub ? 1 : 0);                 // 同頻度なら pool sub 優先
+    if (b.freq !== a.freq) return b.freq - a.freq;              // 頻度desc
+    return (b.isPoolSub ? 1 : 0) - (a.isPoolSub ? 1 : 0);       // 同頻度なら pool sub 優先
   });
   return candidates.slice(0, maxN).map(function(c) { return c.word; });
 }
