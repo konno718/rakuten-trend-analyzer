@@ -68,21 +68,14 @@ function runHiddenGemAnalysis() {
       };
     });
 
-    // AI分析（Gemini）
-    if (config.geminiApiKey) {
-      classified = analyzeWithGemini(config.geminiApiKey, gc.genreName, classified);
-    } else {
-      Logger.log('GEMINI_API_KEY 未設定。AI分析スキップ（ワードそのまま使用）');
-    }
-
-    // 調査済み「永久非表示」除外
+    // 調査済み「永久非表示」除外（AI分析の前に絞る）
     classified = classified.filter(function(x) {
       var entry = surveyed[gc.genreName + '::' + x.word];
       if (entry && entry.status === '永久非表示') return false;
       return true;
     });
 
-    // 順位決め: 出現回数desc / 同数ならお宝優先
+    // 順位決め: 出現回数desc / 同数ならお宝優先（AI分析の前にソート+上限で絞る）
     classified.sort(function(a, b) {
       if (b.count !== a.count) return b.count - a.count;
       if (!a.isMainWord && b.isMainWord) return -1;
@@ -91,6 +84,13 @@ function runHiddenGemAnalysis() {
     });
 
     var top = classified.slice(0, HIDDEN_GEM_MAX_PER_GENRE);
+
+    // AI分析（Gemini）は絞った top50 だけに対して実行（トークン節約・速度改善）
+    if (config.geminiApiKey) {
+      top = analyzeWithGemini(config.geminiApiKey, gc.genreName, top);
+    } else {
+      Logger.log('GEMINI_API_KEY 未設定。AI分析スキップ（ワードそのまま使用）');
+    }
 
     // 各エントリに表示用属性を付与
     for (var t = 0; t < top.length; t++) {
