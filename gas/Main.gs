@@ -166,32 +166,36 @@ function createAnalysisTriggers() {
     }
   }
 
-  // 01:00 ランキング収集
-  ScriptApp.newTrigger('runDailyCollection').timeBased().everyDays(1).atHour(1).create();
+  // 全処理を15分間隔で連続配置
+  // 01:00 runDailyCollection
+  // 01:15-03:00 runWordPoolStep ×8本 (2時間)
+  // 03:15 runHiddenGemAnalysis
+  // 03:30 runSuggestCleanup
+  // 日曜23:00 runMonthlyAggregation
 
-  // 02:00-04:45 語彙プール構築（15分間隔・計12本＝3時間）
-  for (var h = 2; h <= 4; h++) {
-    [0, 15, 30, 45].forEach(function(m) {
-      ScriptApp.newTrigger('runWordPoolStep')
-        .timeBased().everyDays(1).atHour(h).nearMinute(m).create();
-    });
-  }
+  ScriptApp.newTrigger('runDailyCollection').timeBased().everyDays(1).atHour(1).nearMinute(0).create();
 
-  // 05:00 推奨ワード分析
-  ScriptApp.newTrigger('runHiddenGemAnalysis').timeBased().everyDays(1).atHour(5).create();
+  // 01:15, 01:30, 01:45, 02:00, 02:15, 02:30, 02:45, 03:00 = 8本
+  var slots = [
+    {h: 1, m: 15}, {h: 1, m: 30}, {h: 1, m: 45},
+    {h: 2, m: 0}, {h: 2, m: 15}, {h: 2, m: 30}, {h: 2, m: 45},
+    {h: 3, m: 0},
+  ];
+  slots.forEach(function(slot) {
+    ScriptApp.newTrigger('runWordPoolStep')
+      .timeBased().everyDays(1).atHour(slot.h).nearMinute(slot.m).create();
+  });
 
-  // 06:00 推奨ワードクリーンアップ
-  ScriptApp.newTrigger('runSuggestCleanup').timeBased().everyDays(1).atHour(6).create();
-
-  // 毎週日曜 23:00 月次集計
+  ScriptApp.newTrigger('runHiddenGemAnalysis').timeBased().everyDays(1).atHour(3).nearMinute(15).create();
+  ScriptApp.newTrigger('runSuggestCleanup').timeBased().everyDays(1).atHour(3).nearMinute(30).create();
   ScriptApp.newTrigger('runMonthlyAggregation')
     .timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(23).create();
 
-  Logger.log('分析トリガー登録完了:');
+  Logger.log('分析トリガー登録完了 (全12本):');
   Logger.log('  01:00 runDailyCollection');
-  Logger.log('  02:00-04:45 runWordPoolStep (15分間隔×12本)');
-  Logger.log('  05:00 runHiddenGemAnalysis');
-  Logger.log('  06:00 runSuggestCleanup');
+  Logger.log('  01:15-03:00 runWordPoolStep (15分間隔×8本)');
+  Logger.log('  03:15 runHiddenGemAnalysis');
+  Logger.log('  03:30 runSuggestCleanup');
   Logger.log('  日曜23:00 runMonthlyAggregation');
 }
 
