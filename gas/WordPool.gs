@@ -28,12 +28,22 @@ function runWordPoolStep() {
   }
 
   var genreConfigs = readGenreConfigs();
-  // モード別有効フラグ導入後は genreId 重複除外しない（同ジャンルでも
-  // モードが違えば除外ワードが異なるため別々に収集）
-  Logger.log('処理ジャンル×モード数: ' + genreConfigs.length);
+  // URL でグループ化（同じURLは1回処理→該当する全モードフラグで pool 更新）
+  var byUrl = {};
+  var entries = [];
+  for (var ci = 0; ci < genreConfigs.length; ci++) {
+    var gcc = genreConfigs[ci];
+    var key = gcc.rakutenUrl;
+    if (!byUrl[key]) {
+      byUrl[key] = { genreName: gcc.genreName, rakutenUrl: gcc.rakutenUrl, modes: [] };
+      entries.push(byUrl[key]);
+    }
+    if (byUrl[key].modes.indexOf(gcc.mode) < 0) byUrl[key].modes.push(gcc.mode);
+  }
+  Logger.log('処理ジャンル数(ユニーク): ' + entries.length);
 
-  if (index >= genreConfigs.length) {
-    Logger.log('語彙プール: 本日分は全ジャンル完了済み（index=' + index + ' / ' + genreConfigs.length + '）');
+  if (index >= entries.length) {
+    Logger.log('語彙プール: 本日分は全ジャンル完了済み（index=' + index + ' / ' + entries.length + '）');
     return;
   }
 
@@ -41,24 +51,24 @@ function runWordPoolStep() {
 
   var deadline = new Date(startTime.getTime() + WORDPOOL_STEP_TIME_LIMIT_MS);
 
-  while (index < genreConfigs.length) {
+  while (index < entries.length) {
     if (new Date() >= deadline) {
       Logger.log('時間切れ。次回トリガーで index=' + index + ' から継続');
       break;
     }
 
-    var gc = genreConfigs[index];
+    var entry = entries[index];
     try {
-      processGenreForWordPool(gc, config.rakutenAppId, dateStr, deadline);
+      processGenreForWordPool(entry, config.rakutenAppId, dateStr, deadline);
     } catch(e) {
-      Logger.log(gc.genreName + ' エラー: ' + e);
+      Logger.log(entry.genreName + ' エラー: ' + e);
     }
     index++;
     props.setProperty(WP_CHECKPOINT_INDEX_KEY, String(index));
   }
 
-  if (index >= genreConfigs.length) {
-    Logger.log('語彙プール: 全ジャンル(' + genreConfigs.length + ')完了');
+  if (index >= entries.length) {
+    Logger.log('語彙プール: 全ジャンル(' + entries.length + ')完了');
   }
 }
 
@@ -67,14 +77,14 @@ function runWordPoolStep() {
  * 4ソース: ItemSearch / ItemRanking / タグ辞書 / 子ジャンル名
  * deadline を渡すと途中で時間切れ判定して早期リターン（部分結果は書き込み済）
  */
-function processGenreForWordPool(gc, appId, dateStr, deadline) {
-  var genreId = parseGenreIdFromUrl(gc.rakutenUrl);
+function processGenreForWordPool(entry, appId, dateStr, deadline) {
+  var genreId = parseGenreIdFromUrl(entry.rakutenUrl);
   if (!genreId) {
-    Logger.log('ジャンルID取得失敗: ' + gc.rakutenUrl);
+    Logger.log('ジャンルID取得失敗: ' + entry.rakutenUrl);
     return;
   }
 
-  Logger.log('[' + gc.genreName + '] 語彙プール更新開始');
+  Logger.log('[' + entry.genreName + ' / ' + entry.modes.join(',') + '] 語彙プール更新開始');
 
   // Step 2: 語彙プール構築時はフィルタせず全トークン登録
   // 除外・装飾語・消耗品・同義語は推奨ワード分析時に適用
@@ -122,10 +132,10 @@ function processGenreForWordPool(gc, appId, dateStr, deadline) {
     Utilities.sleep(RAKUTEN_API_DELAY_MS);
   }
 
-  // --- 語彙プールシートに反映（部分でも書き込み・モード別有効フラグ更新） ---
-  updateWordPoolSheet(gc.genreName, wordRecords, dateStr, gc.mode);
+  // --- 語彙プールシートに反映（該当する全モード列をTRUE化） ---
+  updateWordPoolSheet(entry.genreName, wordRecords, dateStr, entry.modes);
 
-  Logger.log('[' + gc.genreName + ':' + gc.mode + '] 語彙プール完了: ' + Object.keys(wordRecords).length + 'レコード');
+  Logger.log('[' + entry.genreName + ':' + entry.modes.join(',') + '] 語彙プール完了: ' + Object.keys(wordRecords).length + 'レコード');
 }
 
 /**
@@ -340,24 +350,27 @@ function fetchTagInfo(appId, tagId) {
  * なければ新規行追加（該当モード列のみTRUE、他モード列はFALSE）
  * 列: A=ジャンル B=ワード C=由来 D=分類 E=中国輸入有効 F=国内会社有効 G=初出日 H=最終更新日 I=ヒット数
  */
-function updateWordPoolSheet(genreName, wordRecords, dateStr, mode) {
+function updateWordPoolSheet(genreName, wordRecords, dateStr, modes) {
+  // modes: 配列。後方互換のため文字列も受け付け
+  if (typeof modes === 'string') modes = [modes];
+  if (!modes || modes.length === 0) return;
+
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var ws = ss.getSheetByName(SHEET_NAMES.WORD_POOL);
   if (!ws) ws = initWordPoolSheet(ss);
 
-  var modeColIdx = (mode === MODES.DOMESTIC) ? 5 : 4;  // 0-index: E=4, F=5
+  var hasChina    = modes.indexOf(MODES.CHINA)    >= 0;
+  var hasDomestic = modes.indexOf(MODES.DOMESTIC) >= 0;
 
-  // 全データを一度だけ読み込み（1 getValues コール）
   var lastRow = ws.getLastRow();
   var allData = (lastRow >= 2) ? ws.getRange(2, 1, lastRow - 1, 9).getValues() : [];
 
-  // 既存行インデックス構築（同ジャンル内）
   var existing = {};
   for (var i = 0; i < allData.length; i++) {
     var g = String(allData[i][0] || '').trim();
     var w = String(allData[i][1] || '').trim();
     var s = String(allData[i][2] || '').trim();
-    if (g === genreName && w && s) existing[w + '||' + s] = i;  // 0-based index in allData
+    if (g === genreName && w && s) existing[w + '||' + s] = i;
   }
 
   var hasUpdates = false;
@@ -367,26 +380,22 @@ function updateWordPoolSheet(genreName, wordRecords, dateStr, mode) {
     var rec = wordRecords[keys[k]];
     if (existing[keys[k]] !== undefined) {
       var idx = existing[keys[k]];
-      // メモリ内で更新
-      allData[idx][modeColIdx] = true;
-      allData[idx][7] = dateStr;  // 最終更新日 (H列)
-      allData[idx][8] = Number(allData[idx][8] || 0) + rec.hits;  // ヒット数 (I列)
+      if (hasChina    && allData[idx][4] !== true) allData[idx][4] = true;
+      if (hasDomestic && allData[idx][5] !== true) allData[idx][5] = true;
+      allData[idx][7] = dateStr;
+      allData[idx][8] = Number(allData[idx][8] || 0) + rec.hits;
       hasUpdates = true;
     } else {
-      var isChina = (mode !== MODES.DOMESTIC);
       newRows.push([
         genreName, rec.word, rec.source, rec.classification || 'main',
-        isChina, !isChina, dateStr, dateStr, rec.hits
+        hasChina, hasDomestic, dateStr, dateStr, rec.hits
       ]);
     }
   }
 
-  // 既存行の一括書き戻し（変更があれば全行バルク書き込み）
   if (hasUpdates && allData.length > 0) {
     ws.getRange(2, 1, allData.length, 9).setValues(allData);
   }
-
-  // 新規行追加
   if (newRows.length > 0) {
     var startRow = ws.getLastRow() + 1;
     ws.getRange(startRow, 1, newRows.length, 9).setValues(newRows);

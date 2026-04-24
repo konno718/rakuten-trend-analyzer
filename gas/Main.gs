@@ -26,26 +26,37 @@ function runDailyCollection() {
     throw new Error('有効なジャンル設定がありません。設定シートを確認してください。');
   }
 
-  var totalWritten = 0;
-  for (var i = 0; i < genreConfigs.length; i++) {
-    var gc = genreConfigs[i];
-    try {
-      Logger.log('処理中: ' + gc.genreName + ' [' + gc.mode + ']');
+  // URL でグループ化（同じURLは1回取得 → 該当する全モードに書き込み）
+  var byUrl = {};
+  var orderedUrls = [];
+  for (var ci = 0; ci < genreConfigs.length; ci++) {
+    var gcc = genreConfigs[ci];
+    var key = gcc.rakutenUrl;
+    if (!byUrl[key]) {
+      byUrl[key] = { genreName: gcc.genreName, rakutenUrl: gcc.rakutenUrl, modes: [] };
+      orderedUrls.push(key);
+    }
+    if (byUrl[key].modes.indexOf(gcc.mode) < 0) byUrl[key].modes.push(gcc.mode);
+  }
 
-      var genreId = parseGenreIdFromUrl(gc.rakutenUrl);
+  var totalWritten = 0;
+  for (var u = 0; u < orderedUrls.length; u++) {
+    var entry = byUrl[orderedUrls[u]];
+    try {
+      Logger.log('処理中: ' + entry.genreName + ' [' + entry.modes.join(',') + ']');
+
+      var genreId = parseGenreIdFromUrl(entry.rakutenUrl);
       if (!genreId) {
-        Logger.log('ジャンルID取得失敗: ' + gc.rakutenUrl);
+        Logger.log('ジャンルID取得失敗: ' + entry.rakutenUrl);
         continue;
       }
 
       var items = fetchRakutenRanking(config.rakutenAppId, genreId, RANKING_TOP_N);
       if (items.length === 0) continue;
 
-      // Step 2: 商品名整形のみ、商品レベル除外は HiddenGem で適用
-      // 設定シートG列(分析開始順位) 以降の商品のみ保存（データ量節約）
+      // 商品名整形のみ
       var filtered = [];
       for (var k = 0; k < items.length; k++) {
-        if (gc.startRank && items[k].rank < gc.startRank) continue;
         var cleaned = cleanTitlePrefix(items[k].itemName || '');
         filtered.push({
           rank     : items[k].rank,
@@ -55,13 +66,16 @@ function runDailyCollection() {
         });
       }
 
-      writeRankingItems(filtered, dateStr, gc.genreName, gc.mode);
-      totalWritten += filtered.length;
+      // 該当する全モードのランキングシートに書き込み
+      for (var mi = 0; mi < entry.modes.length; mi++) {
+        writeRankingItems(filtered, dateStr, entry.genreName, entry.modes[mi]);
+        totalWritten += filtered.length;
+      }
       Utilities.sleep(1000);
 
     } catch(e) {
-      Logger.log(gc.genreName + ' エラー: ' + e);
-      if (config.discordWebhook) sendErrorAlert(config.discordWebhook, gc.genreName + ' エラー: ' + e);
+      Logger.log(entry.genreName + ' エラー: ' + e);
+      if (config.discordWebhook) sendErrorAlert(config.discordWebhook, entry.genreName + ' エラー: ' + e);
     }
   }
 
