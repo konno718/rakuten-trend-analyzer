@@ -39,7 +39,7 @@ function runHiddenGemAnalysis() {
   }
   genreConfigs = uniqueConfigs;
 
-  var deadline = new Date(startTime.getTime() + 5 * 60 * 1000);
+  var deadline = new Date(startTime.getTime() + WORDPOOL_STEP_TIME_LIMIT_MS);
   var rowsByMode = {};
   rowsByMode[MODES.CHINA]    = [];
   rowsByMode[MODES.DOMESTIC] = [];
