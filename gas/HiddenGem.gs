@@ -786,9 +786,23 @@ function writeHiddenGemResults(rows, dateStr, mode) {
     if (emptyBg.length > 0) ws.getRange(2, 1, emptyBg.length, totalCols).setBackgrounds(emptyBg);
   }
 
-  // 4. 過去日履歴 + 新規 を連結して書き込み
-  var merged = keepData.concat(newValues);
-  var mergedBg = keepBg.concat(newBg);
+  // 4. 並び順: 新規(当日)を上、過去日を date desc で下に並べる
+  // keepData/keepBg をペアでソート
+  var paired = [];
+  for (var pi = 0; pi < keepData.length; pi++) {
+    paired.push({ data: keepData[pi], bg: keepBg[pi] });
+  }
+  paired.sort(function(a, b) {
+    var da = a.data[0], db = b.data[0];
+    var ta = (da instanceof Date) ? da.getTime() : new Date(da).getTime();
+    var tb = (db instanceof Date) ? db.getTime() : new Date(db).getTime();
+    return tb - ta;  // 日付降順
+  });
+  var sortedKeepData = paired.map(function(p){ return p.data; });
+  var sortedKeepBg   = paired.map(function(p){ return p.bg; });
+
+  var merged = newValues.concat(sortedKeepData);
+  var mergedBg = newBg.concat(sortedKeepBg);
   if (merged.length > 0) {
     ws.getRange(2, 1, merged.length, totalCols).setValues(merged);
     ws.getRange(2, 1, mergedBg.length, totalCols).setBackgrounds(mergedBg);
