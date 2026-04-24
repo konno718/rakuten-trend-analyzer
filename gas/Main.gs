@@ -168,16 +168,20 @@ function createAnalysisTriggers() {
 
   // 全処理を15分間隔で連続配置
   // 01:00 runDailyCollection
-  // 01:15-03:00 runWordPoolStep ×8本 (2時間)
+  // 01:15 runMonthlyAggregation (日曜のみ)
+  // 01:30-03:00 runWordPoolStep ×7本
   // 03:15 runHiddenGemAnalysis
   // 03:30 runSuggestCleanup
-  // 日曜23:00 runMonthlyAggregation
 
   ScriptApp.newTrigger('runDailyCollection').timeBased().everyDays(1).atHour(1).nearMinute(0).create();
 
-  // 01:15, 01:30, 01:45, 02:00, 02:15, 02:30, 02:45, 03:00 = 8本
+  // 日曜 01:15 月次集計
+  ScriptApp.newTrigger('runMonthlyAggregation')
+    .timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(1).nearMinute(15).create();
+
+  // 01:30, 01:45, 02:00, 02:15, 02:30, 02:45, 03:00 = 7本
   var slots = [
-    {h: 1, m: 15}, {h: 1, m: 30}, {h: 1, m: 45},
+    {h: 1, m: 30}, {h: 1, m: 45},
     {h: 2, m: 0}, {h: 2, m: 15}, {h: 2, m: 30}, {h: 2, m: 45},
     {h: 3, m: 0},
   ];
@@ -188,15 +192,13 @@ function createAnalysisTriggers() {
 
   ScriptApp.newTrigger('runHiddenGemAnalysis').timeBased().everyDays(1).atHour(3).nearMinute(15).create();
   ScriptApp.newTrigger('runSuggestCleanup').timeBased().everyDays(1).atHour(3).nearMinute(30).create();
-  ScriptApp.newTrigger('runMonthlyAggregation')
-    .timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(23).create();
 
-  Logger.log('分析トリガー登録完了 (全12本):');
+  Logger.log('分析トリガー登録完了 (全11本):');
   Logger.log('  01:00 runDailyCollection');
-  Logger.log('  01:15-03:00 runWordPoolStep (15分間隔×8本)');
+  Logger.log('  日曜01:15 runMonthlyAggregation');
+  Logger.log('  01:30-03:00 runWordPoolStep (15分間隔×7本)');
   Logger.log('  03:15 runHiddenGemAnalysis');
   Logger.log('  03:30 runSuggestCleanup');
-  Logger.log('  日曜23:00 runMonthlyAggregation');
 }
 
 /**
