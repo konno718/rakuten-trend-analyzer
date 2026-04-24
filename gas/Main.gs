@@ -169,21 +169,19 @@ function createAnalysisTriggers() {
   // 01:00 ランキング収集
   ScriptApp.newTrigger('runDailyCollection').timeBased().everyDays(1).atHour(1).create();
 
-  // 02:00-03:45 語彙プール構築（15分間隔・計8本）
-  var slots = [
-    {h: 2, m: 0}, {h: 2, m: 15}, {h: 2, m: 30}, {h: 2, m: 45},
-    {h: 3, m: 0}, {h: 3, m: 15}, {h: 3, m: 30}, {h: 3, m: 45},
-  ];
-  slots.forEach(function(slot) {
-    ScriptApp.newTrigger('runWordPoolStep')
-      .timeBased().everyDays(1).atHour(slot.h).nearMinute(slot.m).create();
-  });
+  // 02:00-04:45 語彙プール構築（15分間隔・計12本＝3時間）
+  for (var h = 2; h <= 4; h++) {
+    [0, 15, 30, 45].forEach(function(m) {
+      ScriptApp.newTrigger('runWordPoolStep')
+        .timeBased().everyDays(1).atHour(h).nearMinute(m).create();
+    });
+  }
 
-  // 04:00 推奨ワード分析
-  ScriptApp.newTrigger('runHiddenGemAnalysis').timeBased().everyDays(1).atHour(4).create();
+  // 05:00 推奨ワード分析
+  ScriptApp.newTrigger('runHiddenGemAnalysis').timeBased().everyDays(1).atHour(5).create();
 
-  // 05:00 推奨ワードクリーンアップ（14日超削除・除外一致削除・調査済み削除・日付desc並び替え）
-  ScriptApp.newTrigger('runSuggestCleanup').timeBased().everyDays(1).atHour(5).create();
+  // 06:00 推奨ワードクリーンアップ
+  ScriptApp.newTrigger('runSuggestCleanup').timeBased().everyDays(1).atHour(6).create();
 
   // 毎週日曜 23:00 月次集計
   ScriptApp.newTrigger('runMonthlyAggregation')
@@ -191,9 +189,9 @@ function createAnalysisTriggers() {
 
   Logger.log('分析トリガー登録完了:');
   Logger.log('  01:00 runDailyCollection');
-  Logger.log('  02:00-03:45 runWordPoolStep (15分間隔×8本)');
-  Logger.log('  04:00 runHiddenGemAnalysis');
-  Logger.log('  05:00 runSuggestCleanup');
+  Logger.log('  02:00-04:45 runWordPoolStep (15分間隔×12本)');
+  Logger.log('  05:00 runHiddenGemAnalysis');
+  Logger.log('  06:00 runSuggestCleanup');
   Logger.log('  日曜23:00 runMonthlyAggregation');
 }
 
