@@ -487,6 +487,95 @@ function loadHiddenGemHistory(daysBack, mode) {
 }
 
 /**
+ * 推奨ワード_* シートのクリーンアップ（毎日実行想定）
+ *  - 14日より古い行を削除
+ *  - 該当モードで有効な除外ワード（装飾語含む）にメインワードが一致する行を削除
+ *  - 調査済みワードにメインワードが一致する行を削除（全ステータス）
+ *  - 残った行を日付desc順にソート
+ */
+function runSuggestCleanup() {
+  var startTime = new Date();
+  Logger.log('=== 推奨ワードクリーンアップ開始 ===');
+  var surveyed = loadSurveyedWords();
+  [MODES.CHINA, MODES.DOMESTIC].forEach(function(mode) {
+    _cleanupSuggestSheet(mode, surveyed);
+  });
+  var elapsed = (new Date() - startTime) / 1000;
+  Logger.log('=== クリーンアップ完了 / ' + elapsed.toFixed(1) + '秒 ===');
+}
+
+function _cleanupSuggestSheet(mode, surveyed) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ws = ss.getSheetByName(getSuggestSheetName(mode));
+  if (!ws || ws.getLastRow() < 2) return;
+
+  // 除外対象: 該当モードで有効TRUEの除外ワード（装飾語含む全カテゴリ）
+  var excludeMap = loadExcludeWords(mode);        // 装飾語以外
+  var decorativeMap = loadDecorativeWords(mode);  // 装飾語
+  var allExcluded = {};
+  Object.keys(excludeMap).forEach(function(k){ allExcluded[k] = true; });
+  Object.keys(decorativeMap).forEach(function(k){ allExcluded[k] = true; });
+
+  var today = new Date();
+  var cutoff = new Date(today);
+  cutoff.setDate(today.getDate() - 14);
+  cutoff.setHours(0, 0, 0, 0);
+
+  var totalCols = 8 + HIDDEN_GEM_URL_COUNT;
+  var lastRow = ws.getLastRow();
+  var allData = ws.getRange(2, 1, lastRow - 1, totalCols).getValues();
+  var allBg   = ws.getRange(2, 1, lastRow - 1, totalCols).getBackgrounds();
+
+  var keepData = [];
+  var keepBg = [];
+  var delOld = 0, delExclude = 0, delSurveyed = 0;
+
+  for (var i = 0; i < allData.length; i++) {
+    var row = allData[i];
+    var d = row[0];
+    if (!d) continue;
+    var dDate = (d instanceof Date) ? d : new Date(d);
+    if (dDate < cutoff) { delOld++; continue; }
+
+    var mainWord = String(row[4] || '').trim();
+    var genre    = String(row[3] || '').trim();
+    if (allExcluded[mainWord]) { delExclude++; continue; }
+    if (surveyed[genre + '::' + mainWord]) { delSurveyed++; continue; }
+
+    keepData.push(row);
+    keepBg.push(allBg[i]);
+  }
+
+  // 日付desc順
+  var paired = keepData.map(function(d, i){ return { data: d, bg: keepBg[i] }; });
+  paired.sort(function(a, b) {
+    var da = a.data[0], db = b.data[0];
+    var ta = (da instanceof Date) ? da.getTime() : new Date(da).getTime();
+    var tb = (db instanceof Date) ? db.getTime() : new Date(db).getTime();
+    return tb - ta;
+  });
+  keepData = paired.map(function(p){ return p.data; });
+  keepBg   = paired.map(function(p){ return p.bg; });
+
+  // シートクリア → 書き戻し
+  ws.getRange(2, 1, allData.length, totalCols).clearContent();
+  var emptyBg = [];
+  for (var eb = 0; eb < allData.length; eb++) {
+    var er = [];
+    for (var ec = 0; ec < totalCols; ec++) er.push(null);
+    emptyBg.push(er);
+  }
+  ws.getRange(2, 1, emptyBg.length, totalCols).setBackgrounds(emptyBg);
+
+  if (keepData.length > 0) {
+    ws.getRange(2, 1, keepData.length, totalCols).setValues(keepData);
+    ws.getRange(2, 1, keepBg.length, totalCols).setBackgrounds(keepBg);
+  }
+
+  Logger.log('[' + mode + '] 削除: 14日超' + delOld + '件 / 除外一致' + delExclude + '件 / 調査済み一致' + delSurveyed + '件 / 残り' + keepData.length + '件');
+}
+
+/**
  * 推奨ワードのメインワードを Gemini で分類して、
  * カテゴリ以外（装飾語/ブランド/対象）は除外候補シートに自動追加
  * 既に除外ワード/除外候補登録済みの語は skip

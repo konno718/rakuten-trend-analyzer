@@ -144,7 +144,7 @@ function createDailyTrigger() {
  * 既存の同名ハンドラトリガーは削除してから再登録するので、重複はしない。
  */
 function createAnalysisTriggers() {
-  var handlers = ['runDailyCollection', 'runWordPoolStep', 'runHiddenGemAnalysis', 'runMonthlyAggregation'];
+  var handlers = ['runDailyCollection', 'runWordPoolStep', 'runHiddenGemAnalysis', 'runSuggestCleanup', 'runMonthlyAggregation'];
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
     if (handlers.indexOf(triggers[i].getHandlerFunction()) >= 0) {
@@ -155,13 +155,16 @@ function createAnalysisTriggers() {
   // 01:00 ランキング収集
   ScriptApp.newTrigger('runDailyCollection').timeBased().everyDays(1).atHour(1).create();
 
-  // 02:00-06:00 語彙プール構築（毎時間、チェックポイント方式で継続）
+  // 02:00-06:00 語彙プール構築
   for (var h = 2; h <= 6; h++) {
     ScriptApp.newTrigger('runWordPoolStep').timeBased().everyDays(1).atHour(h).create();
   }
 
   // 07:00 推奨ワード分析
   ScriptApp.newTrigger('runHiddenGemAnalysis').timeBased().everyDays(1).atHour(7).create();
+
+  // 08:00 推奨ワードクリーンアップ（14日超削除・除外一致削除・調査済み削除・日付desc並び替え）
+  ScriptApp.newTrigger('runSuggestCleanup').timeBased().everyDays(1).atHour(8).create();
 
   // 毎週日曜 23:00 月次集計
   ScriptApp.newTrigger('runMonthlyAggregation')
@@ -171,6 +174,7 @@ function createAnalysisTriggers() {
   Logger.log('  01:00 runDailyCollection');
   Logger.log('  02-06:00 runWordPoolStep');
   Logger.log('  07:00 runHiddenGemAnalysis');
+  Logger.log('  08:00 runSuggestCleanup');
   Logger.log('  日曜23:00 runMonthlyAggregation');
 }
 
@@ -178,7 +182,7 @@ function createAnalysisTriggers() {
  * 本システムの全トリガー削除（復旧・停止用）
  */
 function removeAnalysisTriggers() {
-  var handlers = ['runDailyCollection', 'runWordPoolStep', 'runHiddenGemAnalysis', 'runMonthlyAggregation'];
+  var handlers = ['runDailyCollection', 'runWordPoolStep', 'runHiddenGemAnalysis', 'runSuggestCleanup', 'runMonthlyAggregation'];
   var triggers = ScriptApp.getProjectTriggers();
   var removed = 0;
   for (var i = 0; i < triggers.length; i++) {
