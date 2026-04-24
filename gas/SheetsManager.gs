@@ -15,6 +15,11 @@ function getOrCreateSheet(ss, name, headers) {
   return ws;
 }
 
+/**
+ * 設定シート読み込み（新構造）
+ * 列: A=ジャンル名 B=URL C=有効 D=中国輸入 E=国内メーカー F=KeepaID
+ * 中国輸入と国内メーカーが両方TRUEなら同ジャンルで2 config 生成
+ */
 function readGenreConfigs() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var ws = ss.getSheetByName(SHEET_NAMES.SETTINGS);
@@ -31,56 +36,52 @@ function readGenreConfigs() {
     var rakutenUrl = String(row[1]).trim();
     var enabledRaw = row[2];
     var enabled = enabledRaw === true || (String(enabledRaw).trim() !== '×' && String(enabledRaw).trim() !== 'false' && String(enabledRaw).trim() !== 'FALSE');
-    var keepaCat   = String(row[3] || '').trim();
-    var modeRaw    = String(row[4] || '').trim();
-    var mode = (modeRaw === MODES.DOMESTIC) ? MODES.DOMESTIC : MODES.CHINA;
-    // G列(row[6]) = 分析開始順位、未指定なら1
-    var startRank = Number(row[6]);
-    if (!startRank || startRank < 1) startRank = 1;
-    if (enabled && genreName && rakutenUrl) {
+    if (!enabled) continue;
+    var chinaFlag    = row[3] === true;
+    var domesticFlag = row[4] === true;
+    var keepaCat     = String(row[5] || '').trim();
+    if (chinaFlag) {
       configs.push({
         genreName  : genreName,
         rakutenUrl : rakutenUrl,
         keepaCat   : keepaCat,
-        mode       : mode,
-        startRank  : startRank,
+        mode       : MODES.CHINA,
+        startRank  : 1,
+      });
+    }
+    if (domesticFlag) {
+      configs.push({
+        genreName  : genreName,
+        rakutenUrl : rakutenUrl,
+        keepaCat   : keepaCat,
+        mode       : MODES.DOMESTIC,
+        startRank  : 1,
       });
     }
   }
-  Logger.log('有効ジャンル数: ' + configs.length);
+  Logger.log('有効ジャンル×モード数: ' + configs.length);
   return configs;
 }
 
 function createSettingsTemplate(ss) {
   var ws = getOrCreateSheet(ss, SHEET_NAMES.SETTINGS, [
-    'ジャンル名', '楽天ランキングURL', '有効', 'KeepaカテゴリID（任意）', 'モード', 'メモ', '分析開始順位'
+    'ジャンル名', '楽天ランキングURL', '有効', '中国輸入', '国内メーカー', 'KeepaカテゴリID（任意）'
   ]);
-  // 既存シートにヘッダ追加（G列が未設定なら追加）
-  if (ws.getLastRow() >= 1) {
-    var g1 = ws.getRange(1, 7).getValue();
-    if (!g1 || String(g1).trim() === '') {
-      ws.getRange(1, 7).setValue('分析開始順位')
-        .setBackground('#4A86E8').setFontColor('#FFFFFF').setFontWeight('bold');
-    }
-  }
-  // 新規シートのサンプルデータ（既存データあれば上書きしない）
   if (ws.getLastRow() <= 1) {
     var samples = [
-      ['インテリア・寝具・収納',     'https://ranking.rakuten.co.jp/daily/100804/', true, '', '中国輸入',   '', 1],
-      ['ペット・ペットグッズ',       'https://ranking.rakuten.co.jp/daily/101213/', true, '', '中国輸入',   '', 51],
-      ['スポーツ・アウトドア',       'https://ranking.rakuten.co.jp/daily/101070/', true, '', '中国輸入',   '', 1],
-      ['日用品雑貨・文房具・手芸',   'https://ranking.rakuten.co.jp/daily/215783/', true, '', '中国輸入',   '', 1],
-      ['キッチン用品・食器・調理器具', 'https://ranking.rakuten.co.jp/daily/558944/', true, '', '中国輸入',   '', 1],
-      ['キッズ・ベビー・マタニティ', 'https://ranking.rakuten.co.jp/daily/100533/', true, '', '国内メーカー', '', 1],
+      ['インテリア・寝具・収納',     'https://ranking.rakuten.co.jp/daily/100804/', true, true,  true,  ''],
+      ['ペット・ペットグッズ',       'https://ranking.rakuten.co.jp/daily/101213/', true, true,  true,  ''],
+      ['スポーツ・アウトドア',       'https://ranking.rakuten.co.jp/daily/101070/', true, true,  true,  ''],
+      ['日用品雑貨・文房具・手芸',   'https://ranking.rakuten.co.jp/daily/215783/', true, true,  true,  ''],
+      ['キッチン用品・食器・調理器具', 'https://ranking.rakuten.co.jp/daily/558944/', true, true,  false, ''],
+      ['キッズ・ベビー・マタニティ', 'https://ranking.rakuten.co.jp/daily/100533/', true, true,  true,  ''],
+      ['ダイエット・健康',           'https://ranking.rakuten.co.jp/daily/100938/', true, false, true,  ''],
+      ['車用品・バイク用品',         'https://ranking.rakuten.co.jp/daily/503190/', true, true,  true,  ''],
     ];
     ws.getRange(2, 1, samples.length, samples[0].length).setValues(samples);
-    ws.getRange(2, 3, samples.length, 1).insertCheckboxes();
+    // 有効/中国輸入/国内メーカー の3列をチェックボックス化
+    ws.getRange(2, 3, samples.length, 3).insertCheckboxes();
   }
-  // モード列のデータ入力規則
-  var modeRule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['中国輸入', '国内メーカー'], true)
-    .setAllowInvalid(false).build();
-  ws.getRange(2, 5, 1000, 1).setDataValidation(modeRule);
 }
 
 /**
